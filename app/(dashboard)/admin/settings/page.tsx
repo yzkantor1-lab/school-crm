@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, useMemo, Suspense } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   School, Users, Heart, BadgeDollarSign, Save, Plus, X, Check,
@@ -229,7 +229,7 @@ function StudentsTab() {
           placeholder="e.g. Elul 2026"
         />
         <p className="text-xs text-slate-400">
-          These appear as options when adding or editing a student's "Semester Came" field.
+          These appear as options when adding or editing a student&apos;s &quot;Semester Came&quot; field.
         </p>
       </div>
       <SaveBar onSave={save} saving={saving} saved={saved} />
@@ -349,7 +349,17 @@ function EmailTab() {
   const [connected, setConnected] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [status, setStatus] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
+
+  // Feedback from OAuth redirect, derived directly from the URL — no effect needed.
+  const status = useMemo<{ type: 'success' | 'error'; msg: string } | null>(() => {
+    const err = searchParams.get('error')
+    const ok  = searchParams.get('success')
+    if (ok === 'connected') return { type: 'success', msg: 'Google account connected successfully!' }
+    if (err === 'missing_credentials') return { type: 'error', msg: 'Save your Client ID and Secret first, then connect.' }
+    if (err === 'oauth_denied')       return { type: 'error', msg: 'Google authorization was cancelled.' }
+    if (err === 'token_exchange')     return { type: 'error', msg: 'Failed to exchange authorization code. Check your credentials.' }
+    return null
+  }, [searchParams])
 
   useEffect(() => {
     getAll(['google_client_id', 'google_client_secret', 'google_refresh_token', 'google_from_email']).then(m => {
@@ -358,13 +368,6 @@ function EmailTab() {
       setFromEmail(m.google_from_email || '')
       setConnected(!!m.google_refresh_token)
     })
-    // Show feedback from OAuth redirect
-    const err = searchParams.get('error')
-    const ok  = searchParams.get('success')
-    if (ok === 'connected') setStatus({ type: 'success', msg: 'Google account connected successfully!' })
-    if (err === 'missing_credentials') setStatus({ type: 'error', msg: 'Save your Client ID and Secret first, then connect.' })
-    if (err === 'oauth_denied')       setStatus({ type: 'error', msg: 'Google authorization was cancelled.' })
-    if (err === 'token_exchange')     setStatus({ type: 'error', msg: 'Failed to exchange authorization code. Check your credentials.' })
   }, [])
 
   async function saveCredentials() {
@@ -459,6 +462,7 @@ function EmailTab() {
       <div className="space-y-3 border-t border-slate-100 pt-5">
         <p className="text-sm font-semibold text-slate-700">Step 3 — Authorize with Google</p>
         <p className="text-xs text-slate-400">After saving your credentials above, click the button below to sign in with your Google Workspace account. You only need to do this once.</p>
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- this hits an API route (OAuth redirect), not a page */}
         <a
           href="/api/auth/google"
           className="inline-flex items-center gap-2 bg-white border border-slate-300 hover:border-blue-400 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-medium shadow-sm transition-colors"

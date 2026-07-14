@@ -1,7 +1,35 @@
+export type CardItem = { image?: string; title?: string; description?: string; link?: string; linkLabel?: string }
+
+export type BlockContent = {
+  bgColor?: string
+  textColor?: string
+  imageUrl?: string
+  headline?: string
+  subheadline?: string
+  buttonLabel?: string
+  buttonLink?: string
+  level?: number
+  align?: string
+  color?: string
+  text?: string
+  src?: string
+  alt?: string
+  width?: string
+  rounded?: boolean
+  caption?: string
+  href?: string
+  label?: string
+  style?: string
+  columns?: number
+  cards?: CardItem[]
+  leftText?: string
+  rightText?: string
+}
+
 interface Block {
   id: string
   type: string
-  content: Record<string, any>
+  content: BlockContent
 }
 
 export default function BlockRenderer({ blocks }: { blocks: Block[] }) {
@@ -30,7 +58,7 @@ function BlockSwitch({ block }: { block: Block }) {
   }
 }
 
-function HeroBlock({ c }: { c: any }) {
+function HeroBlock({ c }: { c: BlockContent }) {
   const style: React.CSSProperties = {
     backgroundColor: c.bgColor || '#1e3a5f',
     color: c.textColor || '#ffffff',
@@ -58,7 +86,7 @@ function HeroBlock({ c }: { c: any }) {
   )
 }
 
-function HeadingBlock({ c }: { c: any }) {
+function HeadingBlock({ c }: { c: BlockContent }) {
   const Tag = (c.level === 3 ? 'h3' : 'h2') as 'h2' | 'h3'
   const align = c.align === 'center' ? 'text-center' : c.align === 'right' ? 'text-right' : 'text-left'
   return (
@@ -73,7 +101,7 @@ function HeadingBlock({ c }: { c: any }) {
   )
 }
 
-function ParagraphBlock({ c }: { c: any }) {
+function ParagraphBlock({ c }: { c: BlockContent }) {
   const align = c.align === 'center' ? 'text-center' : 'text-left'
   return (
     <div className="max-w-6xl mx-auto px-6 py-4">
@@ -87,7 +115,7 @@ function ParagraphBlock({ c }: { c: any }) {
   )
 }
 
-function ImageBlock({ c }: { c: any }) {
+function ImageBlock({ c }: { c: BlockContent }) {
   if (!c.src) return null
   const isContained = c.width !== 'full'
   return (
@@ -106,7 +134,7 @@ function ImageBlock({ c }: { c: any }) {
   )
 }
 
-function ButtonBlock({ c }: { c: any }) {
+function ButtonBlock({ c }: { c: BlockContent }) {
   const alignClass = c.align === 'center' ? 'justify-center' : c.align === 'right' ? 'justify-end' : 'justify-start'
   const styleClass =
     c.style === 'secondary' ? 'bg-slate-700 hover:bg-slate-800 text-white' :
@@ -123,7 +151,7 @@ function ButtonBlock({ c }: { c: any }) {
   )
 }
 
-function DividerBlock({ c }: { c: any }) {
+function DividerBlock({ c }: { c: BlockContent }) {
   if (c.style === 'space') return <div className="py-8" />
   if (c.style === 'dots') {
     return (
@@ -139,13 +167,13 @@ function DividerBlock({ c }: { c: any }) {
   )
 }
 
-function CardGridBlock({ c }: { c: any }) {
+function CardGridBlock({ c }: { c: BlockContent }) {
   const cols = c.columns === 2 ? 'grid-cols-1 md:grid-cols-2' : c.columns === 4 ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4' : 'grid-cols-1 md:grid-cols-3'
-  const cards: any[] = c.cards || []
+  const cards: CardItem[] = c.cards || []
   return (
     <div className="max-w-6xl mx-auto px-6 py-8">
       <div className={`grid ${cols} gap-6`}>
-        {cards.map((card: any, i: number) => (
+        {cards.map((card: CardItem, i: number) => (
           <div key={i} className="bg-white rounded-2xl border border-slate-200 overflow-hidden hover:shadow-md transition">
             {card.image && (
               <img src={card.image} alt={card.title || ''} className="w-full h-48 object-cover" />
@@ -166,7 +194,7 @@ function CardGridBlock({ c }: { c: any }) {
   )
 }
 
-function AnnouncementBlock({ c }: { c: any }) {
+function AnnouncementBlock({ c }: { c: BlockContent }) {
   return (
     <div className="max-w-6xl mx-auto px-6 py-4">
       <div
@@ -179,7 +207,7 @@ function AnnouncementBlock({ c }: { c: any }) {
   )
 }
 
-function TwoColumnBlock({ c }: { c: any }) {
+function TwoColumnBlock({ c }: { c: BlockContent }) {
   return (
     <div className="max-w-6xl mx-auto px-6 py-8">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-10">

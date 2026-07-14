@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { Send, ChevronDown, ChevronUp, Loader2, Check, AlertCircle } from 'lucide-react'
 
 export default function ComposeEmail() {
@@ -35,8 +36,8 @@ export default function ComposeEmail() {
       setTo('')
       setSubject('')
       setBody('')
-    } catch (err: any) {
-      setResult({ type: 'error', msg: err.message })
+    } catch (err) {
+      setResult({ type: 'error', msg: err instanceof Error ? err.message : 'Failed to send' })
     } finally {
       setSending(false)
     }
@@ -112,7 +113,7 @@ export default function ComposeEmail() {
           <div className="flex items-center justify-between pt-1">
             <p className="text-xs text-slate-400">
               Sending via Google Workspace.{' '}
-              <a href="/admin/settings?tab=email" className="underline hover:text-slate-600">Configure in Settings</a>
+              <Link href="/admin/settings?tab=email" className="underline hover:text-slate-600">Configure in Settings</Link>
             </p>
             <button
               onClick={send}

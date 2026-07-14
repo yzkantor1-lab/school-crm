@@ -6,7 +6,7 @@ import { revalidatePath } from 'next/cache'
 interface Block {
   id: string
   type: string
-  content: Record<string, any>
+  content: Record<string, unknown>
   order_index: number
 }
 

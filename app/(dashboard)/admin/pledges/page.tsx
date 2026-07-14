@@ -22,6 +22,10 @@ type PledgePayment = {
 type SortField = 'donor' | 'amount' | 'due_date' | 'status'
 type StatusFilter = 'all' | 'fulfilled' | 'outstanding'
 
+function SortIcon({ field, sortField, sortDir }: { field: SortField; sortField: SortField; sortDir: 'asc' | 'desc' }) {
+  return sortField === field ? (sortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="opacity-40" />
+}
+
 export default function PledgesPage() {
   const supabase = createClient()
   const donorSearchRef = useRef<HTMLDivElement>(null)
@@ -50,15 +54,6 @@ export default function PledgesPage() {
     amount: '', payment_date: new Date().toISOString().split('T')[0], payment_method: 'Cash', notes: ''
   })
 
-  useEffect(() => { loadPledges(); loadDonors() }, [])
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (donorSearchRef.current && !donorSearchRef.current.contains(e.target as Node)) setShowDonorDropdown(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
   async function loadPledges() {
     const { data } = await supabase.from('pledges').select('*, donors(name)').order('due_date', { ascending: true })
     setPledges(data || [])
@@ -69,6 +64,16 @@ export default function PledgesPage() {
     const { data } = await supabase.from('donors').select('id, name').order('name')
     setDonors(data || [])
   }
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
+  useEffect(() => { loadPledges(); loadDonors() }, [])
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (donorSearchRef.current && !donorSearchRef.current.contains(e.target as Node)) setShowDonorDropdown(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
 
   async function loadPayments(pledgeId: string) {
     const { data } = await supabase.from('pledge_payments').select('*').eq('pledge_id', pledgeId).order('payment_date', { ascending: false })
@@ -153,9 +158,6 @@ export default function PledgesPage() {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortField(field); setSortDir('asc') }
   }
-
-  const SortIcon = ({ field }: { field: SortField }) =>
-    sortField === field ? (sortDir === 'asc' ? <ArrowUp size={13} /> : <ArrowDown size={13} />) : <ArrowUpDown size={13} className="opacity-40" />
 
   const filteredDonors = donors.filter(d => d.name.toLowerCase().includes(donorSearch.toLowerCase()))
   const selectedDonorObj = donors.find(d => d.id === formData.donor_id)
@@ -405,18 +407,18 @@ export default function PledgesPage() {
               <tr>
                 <th className="px-4 py-3 text-left text-slate-500 font-medium w-28">Actions</th>
                 <th className="px-5 py-3 text-left text-slate-500 font-medium">
-                  <button onClick={() => handleSort('donor')} className="flex items-center gap-1 hover:text-slate-700">Donor <SortIcon field="donor" /></button>
+                  <button onClick={() => handleSort('donor')} className="flex items-center gap-1 hover:text-slate-700">Donor <SortIcon field="donor" sortField={sortField} sortDir={sortDir} /></button>
                 </th>
                 <th className="px-5 py-3 text-left text-slate-500 font-medium">Purpose</th>
                 <th className="px-5 py-3 text-left text-slate-500 font-medium">
-                  <button onClick={() => handleSort('amount')} className="flex items-center gap-1 hover:text-slate-700">Amount <SortIcon field="amount" /></button>
+                  <button onClick={() => handleSort('amount')} className="flex items-center gap-1 hover:text-slate-700">Amount <SortIcon field="amount" sortField={sortField} sortDir={sortDir} /></button>
                 </th>
                 <th className="px-5 py-3 text-left text-slate-500 font-medium">Progress</th>
                 <th className="px-5 py-3 text-left text-slate-500 font-medium">
-                  <button onClick={() => handleSort('due_date')} className="flex items-center gap-1 hover:text-slate-700">Due Date <SortIcon field="due_date" /></button>
+                  <button onClick={() => handleSort('due_date')} className="flex items-center gap-1 hover:text-slate-700">Due Date <SortIcon field="due_date" sortField={sortField} sortDir={sortDir} /></button>
                 </th>
                 <th className="px-5 py-3 text-left text-slate-500 font-medium">
-                  <button onClick={() => handleSort('status')} className="flex items-center gap-1 hover:text-slate-700">Status <SortIcon field="status" /></button>
+                  <button onClick={() => handleSort('status')} className="flex items-center gap-1 hover:text-slate-700">Status <SortIcon field="status" sortField={sortField} sortDir={sortDir} /></button>
                 </th>
               </tr>
             </thead>

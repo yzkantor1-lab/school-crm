@@ -4,11 +4,11 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
-import { Search, DollarSign, Calendar, CreditCard, FileText, UserPlus, X, Plus } from 'lucide-react'
+import { DollarSign, Calendar, CreditCard, FileText, UserPlus, X } from 'lucide-react'
 
 type Donor = { id: string; name: string; email: string | null }
 type Donation = {
-  id: string; amount: number; donation_method: string; donation_date: string
+  id: string; donor_id: string; amount: number; donation_method: string; donation_date: string
   purpose: string; notes: string | null; archived: boolean
   donors: { name: string }
 }
@@ -163,7 +163,7 @@ export default function DonationsPage() {
                       {d.email && <div className="text-slate-500 text-xs">{d.email}</div>}
                     </button>
                   )) : (
-                    <div className="px-4 py-3 text-slate-500 text-sm text-center">No donors found. Click "Add New Donor" above.</div>
+                    <div className="px-4 py-3 text-slate-500 text-sm text-center">No donors found. Click &quot;Add New Donor&quot; above.</div>
                   )}
                 </div>
               )}
@@ -240,7 +240,7 @@ export default function DonationsPage() {
             </thead>
             <tbody>
               {donations.map(d => (
-                <tr key={d.id} onClick={() => router.push(`/admin/donors/${(d as any).donor_id}`)}
+                <tr key={d.id} onClick={() => router.push(`/admin/donors/${d.donor_id}`)}
                   className="border-b border-slate-50 hover:bg-slate-50 cursor-pointer transition">
                   <td className="px-5 py-3 font-medium text-slate-900">{d.donors.name}</td>
                   <td className="px-5 py-3 text-slate-600">{new Date(d.donation_date).toLocaleDateString()}</td>

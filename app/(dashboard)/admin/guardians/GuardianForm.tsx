@@ -38,7 +38,7 @@ export default function GuardianForm() {
       {[['First Name *', 'first_name', true], ['Last Name *', 'last_name', true], ['Email', 'email', false], ['Phone', 'phone_primary', false], ['Address', 'address_line1', false], ['City', 'city', false], ['State', 'state', false], ['ZIP', 'zip', false]].map(([label, key, req]) => (
         <div key={key as string}>
           <label className="block text-xs font-medium text-slate-500 mb-1">{label as string}</label>
-          <input value={(form as any)[key as string]} onChange={e => set(key as string, e.target.value)} required={req as boolean}
+          <input value={form[key as keyof typeof form]} onChange={e => set(key as string, e.target.value)} required={req as boolean}
             className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
       ))}

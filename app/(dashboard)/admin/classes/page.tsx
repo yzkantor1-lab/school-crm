@@ -1,6 +1,15 @@
 import { createClient } from '@/lib/supabase/server'
 import ClassForm from './ClassForm'
 
+type ClassRow = {
+  id: string
+  name: string
+  subject: string | null
+  grade_level: string | null
+  room: string | null
+  academic_terms: { name: string } | null
+}
+
 export default async function ClassesPage() {
   const supabase = await createClient()
   const [{ data: classes }, { data: terms }] = await Promise.all([
@@ -26,7 +35,7 @@ export default async function ClassesPage() {
               </tr>
             </thead>
             <tbody>
-              {classes?.map((c: any) => (
+              {classes?.map((c: ClassRow) => (
                 <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50 transition">
                   <td className="px-5 py-3 font-medium text-slate-900">{c.name}</td>
                   <td className="px-5 py-3 text-slate-600">{c.subject ?? '—'}</td>

@@ -1,6 +1,4 @@
 import { createClient } from '@/lib/supabase/server'
-import Link from 'next/link'
-import { Plus } from 'lucide-react'
 import GuardianForm from './GuardianForm'
 
 export default async function GuardiansPage() {

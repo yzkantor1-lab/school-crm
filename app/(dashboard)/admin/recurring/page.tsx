@@ -25,8 +25,6 @@ export default function RecurringDonationsPage() {
     end_date: '', total_months: '', day_of_month: '1', donation_method: 'Credit card', notes: ''
   })
 
-  useEffect(() => { load(); loadDonors() }, [])
-
   async function load() {
     const { data } = await supabase.from('recurring_donations').select('*, donors(name)').order('start_date', { ascending: false })
     setRecurring(data || [])
@@ -37,6 +35,9 @@ export default function RecurringDonationsPage() {
     const { data } = await supabase.from('donors').select('id, name').order('name')
     setDonors(data || [])
   }
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
+  useEffect(() => { load(); loadDonors() }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

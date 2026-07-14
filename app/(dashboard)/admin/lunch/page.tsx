@@ -1,6 +1,20 @@
 import { createClient } from '@/lib/supabase/server'
 import LunchDepositForm from './LunchDepositForm'
 
+type LunchAccount = {
+  id: string
+  balance: number
+  students: { first_name: string; last_name: string; grade_level: string | null } | null
+}
+
+type LunchTransaction = {
+  id: string
+  type: string
+  description: string | null
+  amount: number
+  lunch_accounts: { students: { first_name: string; last_name: string } | null } | null
+}
+
 export default async function LunchPage() {
   const supabase = await createClient()
   const { data: accounts } = await supabase
@@ -14,7 +28,7 @@ export default async function LunchPage() {
     .order('created_at', { ascending: false })
     .limit(10)
 
-  const lowBalance = accounts?.filter((a: any) => Number(a.balance) < 10) ?? []
+  const lowBalance = accounts?.filter((a: LunchAccount) => Number(a.balance) < 10) ?? []
 
   return (
     <div>
@@ -39,7 +53,7 @@ export default async function LunchPage() {
                 </tr>
               </thead>
               <tbody>
-                {accounts?.map((a: any) => (
+                {accounts?.map((a: LunchAccount) => (
                   <tr key={a.id} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="px-5 py-2 font-medium text-slate-900">{a.students?.first_name} {a.students?.last_name}</td>
                     <td className="px-5 py-2 text-slate-600">{a.students?.grade_level ?? '—'}</td>
@@ -65,7 +79,7 @@ export default async function LunchPage() {
                 </tr>
               </thead>
               <tbody>
-                {recentTx?.map((tx: any) => (
+                {recentTx?.map((tx: LunchTransaction) => (
                   <tr key={tx.id} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="px-5 py-2 font-medium text-slate-900">
                       {tx.lunch_accounts?.students?.first_name} {tx.lunch_accounts?.students?.last_name}

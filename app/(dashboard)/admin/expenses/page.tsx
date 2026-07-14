@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
-import { Plus, Edit2, Trash2, Search, Download, Archive, ArchiveRestore, Receipt } from 'lucide-react'
+import { Plus, Edit2, Trash2, Search, Archive, ArchiveRestore, Receipt } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
 
 type Expense = {
@@ -37,14 +37,15 @@ export default function ExpensesPage() {
     amount: '', vendor: '', payment_method: 'Cash', receipt_url: '', notes: ''
   })
 
-  useEffect(() => { fetchExpenses() }, [])
-
   async function fetchExpenses() {
     setLoading(true)
     const { data } = await supabase.from('expenses').select('*').order('date', { ascending: false })
     setExpenses(data || [])
     setLoading(false)
   }
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
+  useEffect(() => { fetchExpenses() }, [])
 
   const filtered = expenses.filter(e => {
     if (e.archived !== showArchived) return false
@@ -109,14 +110,6 @@ export default function ExpensesPage() {
   function resetForm() {
     setFormData({ date: new Date().toISOString().split('T')[0], category: '', description: '', amount: '', vendor: '', payment_method: 'Cash', receipt_url: '', notes: '' })
     setEditing(null); setShowForm(false)
-  }
-
-  function exportCSV() {
-    const headers = ['Date','Category','Description','Amount','Vendor','Payment Method','Notes']
-    const rows = filtered.map(e => [e.date, e.category, e.description, formatCurrency(e.amount).replace('$',''), e.vendor||'', e.payment_method, e.notes||''])
-    const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-    const a = document.createElement('a'); a.href = url; a.download = `expenses_${new Date().toISOString().split('T')[0]}.csv`; a.click()
   }
 
   const years = [...new Set(expenses.map(e => new Date(e.date).getFullYear().toString()))].sort((a,b) => b.localeCompare(a))

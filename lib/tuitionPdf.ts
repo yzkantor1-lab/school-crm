@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- jspdf-autotable types its jsPDF document param as `any` upstream (see jspdf-autotable/dist/index.d.ts); no more precise type is available for the `doc` handle used throughout this file. */
+
 export type SchoolInfo = {
   name: string
   address: string

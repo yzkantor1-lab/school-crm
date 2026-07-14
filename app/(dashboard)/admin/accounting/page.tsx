@@ -1,5 +1,19 @@
 import { createClient } from '@/lib/supabase/server'
 
+type LedgerLine = {
+  account_id: string
+  debit: number | string
+  credit: number | string
+  ledger_accounts: { name: string; code: string } | null
+}
+
+type LedgerEntry = {
+  id: string
+  description: string
+  entry_date: string
+  ledger_lines: LedgerLine[] | null
+}
+
 export default async function AccountingPage() {
   const supabase = await createClient()
   const [{ data: accounts }, { data: entries }] = await Promise.all([
@@ -9,8 +23,8 @@ export default async function AccountingPage() {
 
   const balances: Record<string, number> = {}
   accounts?.forEach(a => { balances[a.id] = 0 })
-  entries?.forEach((e: any) => {
-    e.ledger_lines?.forEach((l: any) => {
+  entries?.forEach((e: LedgerEntry) => {
+    e.ledger_lines?.forEach((l: LedgerLine) => {
       if (balances[l.account_id] !== undefined) {
         balances[l.account_id] += Number(l.debit) - Number(l.credit)
       }
@@ -52,7 +66,7 @@ export default async function AccountingPage() {
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="px-5 py-3 border-b border-slate-100 font-semibold text-slate-900 text-sm">Journal Entries</div>
-        {entries?.length ? entries.map((e: any) => (
+        {entries?.length ? entries.map((e: LedgerEntry) => (
           <div key={e.id} className="px-5 py-4 border-b border-slate-50 last:border-0">
             <div className="flex items-center justify-between mb-2">
               <span className="font-medium text-slate-900 text-sm">{e.description}</span>
@@ -60,7 +74,7 @@ export default async function AccountingPage() {
             </div>
             <table className="w-full text-xs text-slate-600">
               <tbody>
-                {e.ledger_lines?.map((l: any, i: number) => (
+                {e.ledger_lines?.map((l: LedgerLine, i: number) => (
                   <tr key={i}>
                     <td className="pr-4 font-mono">{l.ledger_accounts?.code}</td>
                     <td className="pr-8">{l.ledger_accounts?.name}</td>

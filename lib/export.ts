@@ -1,16 +1,16 @@
 export type ExportColumn = {
   header: string
   key: string
-  format?: (val: any) => string
+  format?: (val: never) => string
 }
 
 // ── CSV ────────────────────────────────────────────────────────────────────────
-export function exportToCSV(data: Record<string, any>[], columns: ExportColumn[], filename: string) {
+export function exportToCSV(data: Record<string, unknown>[], columns: ExportColumn[], filename: string) {
   const headers = columns.map(c => `"${c.header}"`).join(',')
   const rows = data.map(row =>
     columns.map(c => {
       const raw = row[c.key] ?? ''
-      const val = c.format ? c.format(raw) : String(raw)
+      const val = c.format ? c.format(raw as never) : String(raw)
       return `"${val.replace(/"/g, '""')}"`
     }).join(',')
   )
@@ -20,7 +20,7 @@ export function exportToCSV(data: Record<string, any>[], columns: ExportColumn[]
 
 // ── PDF ────────────────────────────────────────────────────────────────────────
 export async function exportToPDF(
-  data: Record<string, any>[],
+  data: Record<string, unknown>[],
   columns: ExportColumn[],
   filename: string,
   title?: string,
@@ -47,7 +47,7 @@ export async function exportToPDF(
     body: data.map(row =>
       columns.map(c => {
         const raw = row[c.key] ?? ''
-        return c.format ? c.format(raw) : String(raw)
+        return c.format ? c.format(raw as never) : String(raw)
       })
     ),
     styles: { fontSize: 8, cellPadding: 3 },

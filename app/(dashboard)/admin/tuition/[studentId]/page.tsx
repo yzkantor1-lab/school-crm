@@ -499,6 +499,7 @@ export default function StudentTuitionPage() {
     setLoading(false)
   }, [studentId])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
   useEffect(() => { load() }, [load])
 
   // Year group for the form's academic year (drives semester labels + day-proportional billing)
@@ -518,9 +519,12 @@ export default function StudentTuitionPage() {
     [planForm.yearly_amount, planForm.plan_came_semester, planForm.plan_left_semester, formYearGroup]
   )
 
-  // Keep total_amount in sync with prorated owed whenever yearly billing changes
+  // Keep total_amount in sync with prorated owed whenever yearly billing changes.
+  // Intentional effect: total_amount stays a user-editable field, auto-filled here
+  // whenever the inputs driving proration change, but overridable afterward.
   useEffect(() => {
     if (formProrated) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs a derived value into editable form state, see comment above
       setPlanForm(f => ({ ...f, total_amount: formProrated.owed.toFixed(2) }))
     }
   }, [formProrated?.owed])

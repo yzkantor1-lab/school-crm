@@ -5,7 +5,7 @@ import { Download, FileText, Sheet } from 'lucide-react'
 import { exportToCSV, exportToPDF, type ExportColumn } from '@/lib/export'
 
 type Props = {
-  data: Record<string, any>[]
+  data: Record<string, unknown>[]
   columns: ExportColumn[]
   filename: string
   title?: string

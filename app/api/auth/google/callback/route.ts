@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     .select('key,value')
     .in('key', ['google_client_id', 'google_client_secret'])
 
-  const map = Object.fromEntries((data || []).map((r: any) => [r.key, r.value]))
+  const map = Object.fromEntries((data || []).map((r: { key: string; value: string }) => [r.key, r.value]))
   const redirectUri = `${BASE}/api/auth/google/callback`
   const oauth2Client = new google.auth.OAuth2(map.google_client_id, map.google_client_secret, redirectUri)
 

@@ -6,15 +6,24 @@ import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
 
+type Guardian = { id: string; first_name: string; last_name: string }
+type Student = { id: string; first_name: string; last_name: string }
+type Term = { id: string; name: string }
+type FeeCategory = { id: string; name: string; default_amount: number | null }
+
+function generateInvoiceNumber() {
+  return `INV-${Date.now().toString().slice(-6)}`
+}
+
 export default function NewInvoicePage() {
   const router = useRouter()
   const supabase = createClient()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [guardians, setGuardians] = useState<any[]>([])
-  const [students, setStudents] = useState<any[]>([])
-  const [terms, setTerms] = useState<any[]>([])
-  const [categories, setCategories] = useState<any[]>([])
+  const [guardians, setGuardians] = useState<Guardian[]>([])
+  const [students, setStudents] = useState<Student[]>([])
+  const [terms, setTerms] = useState<Term[]>([])
+  const [categories, setCategories] = useState<FeeCategory[]>([])
   const [form, setForm] = useState({ guardian_id: '', student_id: '', term_id: '', due_date: '', notes: '' })
   const [items, setItems] = useState([{ description: '', category_id: '', quantity: '1', unit_price: '' }])
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
@@ -50,7 +59,7 @@ export default function NewInvoicePage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true); setError('')
-    const invoiceNumber = `INV-${Date.now().toString().slice(-6)}`
+    const invoiceNumber = generateInvoiceNumber()
     const { data: invoice, error: invErr } = await supabase.from('invoices').insert([{
       invoice_number: invoiceNumber,
       guardian_id: form.guardian_id || null,

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { X, Send, Loader2, Check, AlertCircle } from 'lucide-react'
 
 type Props = {
@@ -40,8 +41,8 @@ export default function EmailPdfModal({ onClose, defaultRecipients, defaultSubje
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Failed to send')
       setResult({ type: 'success', msg: `Sent to ${json.sent} recipient${json.sent !== 1 ? 's' : ''}.` })
-    } catch (err: any) {
-      setResult({ type: 'error', msg: err.message })
+    } catch (err) {
+      setResult({ type: 'error', msg: err instanceof Error ? err.message : 'Failed to send' })
     } finally {
       setSending(false)
     }
@@ -104,7 +105,7 @@ export default function EmailPdfModal({ onClose, defaultRecipients, defaultSubje
         <div className="flex items-center justify-between pt-1">
           <p className="text-xs text-slate-400">
             Sending via Google Workspace.{' '}
-            <a href="/admin/settings?tab=email" className="underline hover:text-slate-600">Configure in Settings</a>
+            <Link href="/admin/settings?tab=email" className="underline hover:text-slate-600">Configure in Settings</Link>
           </p>
           <button
             onClick={send}

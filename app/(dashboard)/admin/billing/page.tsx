@@ -2,6 +2,22 @@ import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { Plus } from 'lucide-react'
 
+type Invoice = {
+  id: string
+  invoice_number: string
+  status: string
+  total: number
+  guardians: { first_name: string; last_name: string } | null
+}
+
+type Payment = {
+  id: string
+  method: string
+  paid_at: string
+  amount: number
+  guardians: { first_name: string; last_name: string } | null
+}
+
 export default async function BillingPage() {
   const supabase = await createClient()
   const [{ data: invoices }, { data: payments }] = await Promise.all([
@@ -49,7 +65,7 @@ export default async function BillingPage() {
               </tr>
             </thead>
             <tbody>
-              {invoices?.map((inv: any) => (
+              {invoices?.map((inv: Invoice) => (
                 <tr key={inv.id} className="border-b border-slate-50 hover:bg-slate-50">
                   <td className="px-5 py-2 font-mono text-slate-900">{inv.invoice_number}</td>
                   <td className="px-5 py-2 text-slate-600">{inv.guardians?.first_name} {inv.guardians?.last_name}</td>
@@ -81,7 +97,7 @@ export default async function BillingPage() {
               </tr>
             </thead>
             <tbody>
-              {payments?.map((p: any) => (
+              {payments?.map((p: Payment) => (
                 <tr key={p.id} className="border-b border-slate-50 hover:bg-slate-50">
                   <td className="px-5 py-2 text-slate-900">{p.guardians?.first_name} {p.guardians?.last_name}</td>
                   <td className="px-5 py-2 text-slate-600 capitalize">{p.method}</td>

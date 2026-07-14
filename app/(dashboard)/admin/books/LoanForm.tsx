@@ -5,13 +5,16 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { BookMarked } from 'lucide-react'
 
-export default function LoanForm({ books }: { books: any[] }) {
+type Book = { id: string; title: string; available_copies: number }
+type Student = { id: string; first_name: string; last_name: string }
+
+export default function LoanForm({ books }: { books: Book[] }) {
   const router = useRouter()
   const supabase = createClient()
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [students, setStudents] = useState<any[]>([])
+  const [students, setStudents] = useState<Student[]>([])
   const [form, setForm] = useState({ book_id: '', student_id: '', due_date: '' })
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
 

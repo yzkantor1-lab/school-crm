@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
       .select('key,value')
       .in('key', ['google_client_id', 'google_client_secret', 'google_refresh_token', 'google_from_email'])
 
-    const cfg = Object.fromEntries((data || []).map((r: any) => [r.key, r.value]))
+    const cfg = Object.fromEntries((data || []).map((r: { key: string; value: string }) => [r.key, r.value]))
 
     if (!cfg.google_refresh_token) {
       return NextResponse.json({ error: 'Google account not connected. Go to Settings → Email to connect.' }, { status: 400 })
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
         refreshToken: cfg.google_refresh_token,
         accessToken,
       },
-    } as any)
+    })
 
     await transporter.sendMail({
       from: cfg.google_from_email,
@@ -71,8 +71,9 @@ export async function POST(req: NextRequest) {
     })
 
     return NextResponse.json({ ok: true, sent: to.length })
-  } catch (err: any) {
+  } catch (err) {
     console.error('send-email error', err)
-    return NextResponse.json({ error: err.message || 'Failed to send email' }, { status: 500 })
+    const message = err instanceof Error ? err.message : 'Failed to send email'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

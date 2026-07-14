@@ -12,7 +12,7 @@ export default function TermForm() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [form, setForm] = useState({ name: '', start_date: '', end_date: '', is_active: false })
-  const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }))
+  const set = (k: string, v: string | boolean) => setForm(f => ({ ...f, [k]: v }))
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

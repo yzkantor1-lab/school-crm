@@ -31,15 +31,17 @@ const PARENT_FIELDS = [
   field('Mother Email', 'mother_email'),
 ]
 
-export default function StudentEditForm({ student }: { student: any }) {
+type StudentRow = Record<string, string | null>
+
+export default function StudentEditForm({ student }: { student: StudentRow }) {
   const router = useRouter()
   const supabase = createClient()
-  const [form, setForm] = useState(student)
+  const [form, setForm] = useState<StudentRow>(student)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
 
-  const set = (k: string, v: string) => setForm((f: any) => ({ ...f, [k]: v }))
+  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
@@ -250,7 +252,7 @@ export default function StudentEditForm({ student }: { student: any }) {
           </div>
 
           <div className="border-t border-pink-100 pt-4">
-            <h2 className="font-semibold text-slate-900 mb-1">In-Laws <span className="text-xs font-normal text-slate-400">(Spouse's Parents)</span></h2>
+            <h2 className="font-semibold text-slate-900 mb-1">In-Laws <span className="text-xs font-normal text-slate-400">(Spouse&apos;s Parents)</span></h2>
             <div className="space-y-3">
               {([
                 ['Family Title / Name',   'inlaw_parents_title', 'text'],

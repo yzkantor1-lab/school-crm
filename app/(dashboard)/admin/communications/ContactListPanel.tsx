@@ -100,7 +100,6 @@ export default function ContactListPanel() {
 
   // Unique values only (deduplicated), for the copyable list
   const uniqueValues = useMemo(() => [...new Set(entries.map(e => e.value))], [entries])
-  const uniqueSearchedValues = useMemo(() => [...new Set(searchedEntries.map(e => e.value))], [searchedEntries])
 
   async function copyAll() {
     const separator = contactType === 'emails' ? ', ' : '\n'
@@ -109,7 +108,6 @@ export default function ContactListPanel() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const currentType = TYPE_OPTIONS.find(t => t.id === contactType)!
   const isEmail = contactType === 'emails'
 
   // Group entries by student for display

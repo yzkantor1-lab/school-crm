@@ -2,6 +2,14 @@ import { createClient } from '@/lib/supabase/server'
 import BookForm from './BookForm'
 import LoanForm from './LoanForm'
 
+type Loan = {
+  id: string
+  loaned_at: string
+  due_date: string | null
+  books: { title: string } | null
+  students: { first_name: string; last_name: string } | null
+}
+
 export default async function BooksPage() {
   const supabase = await createClient()
   const [{ data: books }, { data: loans }] = await Promise.all([
@@ -55,7 +63,7 @@ export default async function BooksPage() {
                 </tr>
               </thead>
               <tbody>
-                {loans?.map((l: any) => (
+                {loans?.map((l: Loan) => (
                   <tr key={l.id} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="px-5 py-2 font-medium text-slate-900">{l.books?.title}</td>
                     <td className="px-5 py-2 text-slate-600">{l.students?.first_name} {l.students?.last_name}</td>

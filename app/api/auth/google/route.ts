@@ -9,7 +9,7 @@ export async function GET() {
     .select('key,value')
     .in('key', ['google_client_id', 'google_client_secret'])
 
-  const map = Object.fromEntries((data || []).map((r: any) => [r.key, r.value]))
+  const map = Object.fromEntries((data || []).map((r: { key: string; value: string }) => [r.key, r.value]))
   const clientId = map.google_client_id
   const clientSecret = map.google_client_secret
 

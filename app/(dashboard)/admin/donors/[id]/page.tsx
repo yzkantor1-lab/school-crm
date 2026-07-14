@@ -36,11 +36,6 @@ export default function DonorDetailPage() {
   const [donorForm, setDonorForm] = useState({ name: '', email: '', phone_number: '', address: '', category: '', relationship: '' })
   const [donationForm, setDonationForm] = useState({ amount: '', donation_method: '', donation_date: '', purpose: '', notes: '' })
 
-  useEffect(() => {
-    fetchSettings()
-    fetchData()
-  }, [id])
-
   async function fetchSettings() {
     const { data } = await supabase.from('donor_settings').select('*').limit(1).maybeSingle()
     if (data) {
@@ -64,6 +59,13 @@ export default function DonorDetailPage() {
     setDonations(dn || [])
     setLoading(false)
   }
+
+  /* eslint-disable react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await */
+  useEffect(() => {
+    fetchSettings()
+    fetchData()
+  }, [id])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   async function updateDonor() {
     if (!donor) return

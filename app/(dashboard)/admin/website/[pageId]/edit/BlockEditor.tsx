@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { savePage, deletePage } from './actions'
+import type { BlockContent, CardItem } from '@/components/website/BlockRenderer'
 import {
   ArrowLeft, Plus, Trash2, ChevronUp, ChevronDown, ExternalLink,
   Save, Eye, EyeOff, GripVertical, Loader2, X
@@ -18,7 +19,7 @@ type BlockType =
 interface Block {
   id: string
   type: BlockType
-  content: Record<string, any>
+  content: BlockContent
   order_index: number
 }
 
@@ -47,7 +48,7 @@ const BLOCK_TYPES: { type: BlockType; label: string; description: string; emoji:
   { type: 'divider', label: 'Divider', description: 'Visual separator / space', emoji: '—' },
 ]
 
-function defaultContent(type: BlockType): Record<string, any> {
+function defaultContent(type: BlockType): BlockContent {
   switch (type) {
     case 'hero': return { headline: 'Welcome', subheadline: '', buttonLabel: '', buttonLink: '', bgColor: '#1e3a5f', textColor: '#ffffff', imageUrl: '' }
     case 'heading': return { text: 'Section Heading', level: 2, align: 'left', color: '#1e293b' }
@@ -135,7 +136,7 @@ export default function BlockEditor({ page: initialPage, initialBlocks }: { page
     })
   }, [])
 
-  const updateBlockContent = useCallback((id: string, patch: Record<string, any>) => {
+  const updateBlockContent = useCallback((id: string, patch: Partial<BlockContent>) => {
     setBlocks(prev => prev.map(b => b.id === id ? { ...b, content: { ...b.content, ...patch } } : b))
     setSavedAt(null)
   }, [])
@@ -376,7 +377,7 @@ export default function BlockEditor({ page: initialPage, initialBlocks }: { page
 
 // ── Block Edit Panel ───────────────────────────────────────────────────────────
 
-function BlockEditPanel({ block, onChange }: { block: Block; onChange: (patch: Record<string, any>) => void }) {
+function BlockEditPanel({ block, onChange }: { block: Block; onChange: (patch: Partial<BlockContent>) => void }) {
   const label = blockLabel(block.type)
   return (
     <div className="max-w-2xl mx-auto">
@@ -391,9 +392,11 @@ function BlockEditPanel({ block, onChange }: { block: Block; onChange: (patch: R
   )
 }
 
-function BlockFields({ block, onChange }: { block: Block; onChange: (p: Record<string, any>) => void }) {
+function BlockFields({ block, onChange }: { block: Block; onChange: (p: Partial<BlockContent>) => void }) {
   const c = block.content
-  const set = (key: string, value: any) => onChange({ [key]: value })
+  function set<K extends keyof BlockContent>(key: K, value: BlockContent[K]) {
+    onChange({ [key]: value } as Partial<BlockContent>)
+  }
 
   switch (block.type) {
     case 'hero':
@@ -479,21 +482,21 @@ function BlockFields({ block, onChange }: { block: Block; onChange: (p: Record<s
               className="text-xs text-blue-600 hover:underline font-medium"
             >+ Add Card</button>
           </div>
-          {(c.cards || []).map((card: any, idx: number) => (
+          {(c.cards || []).map((card: CardItem, idx: number) => (
             <div key={idx} className="border border-slate-200 rounded-xl p-4 space-y-3 bg-slate-50">
               <div className="flex items-center justify-between mb-1">
                 <p className="text-xs font-semibold text-slate-500">Card {idx + 1}</p>
                 <button
-                  onClick={() => set('cards', c.cards.filter((_: any, i: number) => i !== idx))}
+                  onClick={() => set('cards', (c.cards || []).filter((_: CardItem, i: number) => i !== idx))}
                   className="text-red-400 hover:text-red-600 text-xs"
                 >Remove</button>
               </div>
-              <Field label="Title" value={card.title} onChange={v => { const cards = [...c.cards]; cards[idx] = { ...cards[idx], title: v }; set('cards', cards) }} placeholder="Card Title" />
-              <Field label="Description" value={card.description} onChange={v => { const cards = [...c.cards]; cards[idx] = { ...cards[idx], description: v }; set('cards', cards) }} placeholder="Short description" textarea rows={2} />
-              <Field label="Image URL" value={card.image} onChange={v => { const cards = [...c.cards]; cards[idx] = { ...cards[idx], image: v }; set('cards', cards) }} placeholder="https://..." />
+              <Field label="Title" value={card.title} onChange={v => { const cards = [...(c.cards || [])]; cards[idx] = { ...cards[idx], title: v }; set('cards', cards) }} placeholder="Card Title" />
+              <Field label="Description" value={card.description} onChange={v => { const cards = [...(c.cards || [])]; cards[idx] = { ...cards[idx], description: v }; set('cards', cards) }} placeholder="Short description" textarea rows={2} />
+              <Field label="Image URL" value={card.image} onChange={v => { const cards = [...(c.cards || [])]; cards[idx] = { ...cards[idx], image: v }; set('cards', cards) }} placeholder="https://..." />
               <div className="grid grid-cols-2 gap-2">
-                <Field label="Link URL" value={card.link} onChange={v => { const cards = [...c.cards]; cards[idx] = { ...cards[idx], link: v }; set('cards', cards) }} placeholder="/page" />
-                <Field label="Link Label" value={card.linkLabel} onChange={v => { const cards = [...c.cards]; cards[idx] = { ...cards[idx], linkLabel: v }; set('cards', cards) }} placeholder="Read more" />
+                <Field label="Link URL" value={card.link} onChange={v => { const cards = [...(c.cards || [])]; cards[idx] = { ...cards[idx], link: v }; set('cards', cards) }} placeholder="/page" />
+                <Field label="Link Label" value={card.linkLabel} onChange={v => { const cards = [...(c.cards || [])]; cards[idx] = { ...cards[idx], linkLabel: v }; set('cards', cards) }} placeholder="Read more" />
               </div>
             </div>
           ))}
@@ -527,7 +530,7 @@ function BlockFields({ block, onChange }: { block: Block; onChange: (p: Record<s
 
 function Field({ label, value, onChange, placeholder, textarea, rows }: {
   label: string
-  value: string
+  value?: string
   onChange: (v: string) => void
   placeholder?: string
   textarea?: boolean
@@ -547,21 +550,21 @@ function Field({ label, value, onChange, placeholder, textarea, rows }: {
 
 function SelectField({ label, value, onChange, options }: {
   label: string
-  value: string
+  value?: string
   onChange: (v: string) => void
   options: { value: string; label: string }[]
 }) {
   return (
     <div>
       <label className="block text-sm font-medium text-slate-700 mb-1.5">{label}</label>
-      <select value={value} onChange={e => onChange(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+      <select value={value ?? ''} onChange={e => onChange(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
         {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </div>
   )
 }
 
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function ColorField({ label, value, onChange }: { label: string; value?: string; onChange: (v: string) => void }) {
   return (
     <div>
       <label className="block text-sm font-medium text-slate-700 mb-1.5">{label}</label>
@@ -575,7 +578,7 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
   )
 }
 
-function ToggleField({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+function ToggleField({ label, value, onChange }: { label: string; value?: boolean; onChange: (v: boolean) => void }) {
   return (
     <div>
       <label className="block text-sm font-medium text-slate-700 mb-1.5">{label}</label>

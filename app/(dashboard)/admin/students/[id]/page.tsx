@@ -5,6 +5,9 @@ import { notFound } from 'next/navigation'
 import StudentEditForm from './StudentEditForm'
 import TuitionSection from './TuitionSection'
 
+type GuardianLink = { guardians: { id: string; first_name: string; last_name: string; email: string | null; phone_primary: string | null } }
+type EnrollmentLink = { classes: { name: string; subject: string | null; grade_level: string | null } }
+
 export default async function StudentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const supabase = await createClient()
@@ -30,7 +33,7 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
         <div className="space-y-5">
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
             <h2 className="font-semibold text-slate-900 mb-3">Guardians</h2>
-            {guardians?.length ? guardians.map((g: any) => (
+            {guardians?.length ? (guardians as unknown as GuardianLink[]).map(g => (
               <div key={g.guardians.id} className="text-sm text-slate-700 py-1.5 border-b border-slate-50 last:border-0">
                 <p className="font-medium">{g.guardians.first_name} {g.guardians.last_name}</p>
                 <p className="text-slate-500">{g.guardians.email} · {g.guardians.phone_primary}</p>
@@ -40,7 +43,7 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
             <h2 className="font-semibold text-slate-900 mb-3">Enrolled Classes</h2>
-            {enrollments?.length ? enrollments.map((e: any, i: number) => (
+            {enrollments?.length ? (enrollments as unknown as EnrollmentLink[]).map((e, i: number) => (
               <div key={i} className="text-sm text-slate-700 py-1.5 border-b border-slate-50 last:border-0">
                 <p className="font-medium">{e.classes.name}</p>
                 <p className="text-slate-500">{e.classes.subject}</p>

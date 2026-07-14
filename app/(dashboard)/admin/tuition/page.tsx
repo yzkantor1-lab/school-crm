@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Search, GraduationCap, DollarSign, Plus, ChevronRight, Filter, X, UserPlus, BookOpen, CalendarDays, Users } from 'lucide-react'
+import { Search, GraduationCap, Plus, ChevronRight, Filter, X, UserPlus, BookOpen, CalendarDays, Users } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
 import ExportButton from '@/components/ExportButton'
 import { SCHOOL_YEAR_SEMESTERS } from '@/lib/semesters'
@@ -58,6 +58,8 @@ type StudentWithTuition = Student & {
 
 type Tab = 'all' | 'year' | 'semester'
 type StatusFilter = 'all' | 'current' | 'graduated'
+
+type TuitionPayment = { id: string; tuition_plan_id: string; amount: number; status: string; payment_type: string | null }
 
 function toExportRow(s: StudentWithTuition) {
   return {
@@ -121,7 +123,7 @@ export default function TuitionPage() {
   // The connection to Supabase from some networks drops requests intermittently,
   // so every fetch here retries a few times with a short backoff before giving up.
   async function withRetry<T>(label: string, fn: () => Promise<T>, attempts = 5): Promise<T> {
-    let lastErr: any
+    let lastErr: unknown
     for (let i = 0; i < attempts; i++) {
       try {
         return await fn()
@@ -130,7 +132,8 @@ export default function TuitionPage() {
         if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)))
       }
     }
-    throw new Error(`${label} — ${lastErr?.message ?? String(lastErr)} (after ${attempts} attempts)`)
+    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
+    throw new Error(`${label} — ${msg} (after ${attempts} attempts)`)
   }
 
   // Deliberately avoids supabase-js's .range() — it sends an HTTP Range header
@@ -138,7 +141,7 @@ export default function TuitionPage() {
   // (non-media) responses. Plain limit/offset query params avoid that header.
   async function fetchAllPaidPayments() {
     const pageSize = 50
-    const all: { id: string; tuition_plan_id: string; amount: number; status: string; payment_type: string | null }[] = []
+    const all: TuitionPayment[] = []
     const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
     const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     let offset = 0
@@ -155,7 +158,7 @@ export default function TuitionPage() {
           headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return (await res.json()) as { id: string; tuition_plan_id: string; amount: number; status: string; payment_type: string | null }[]
+        return (await res.json()) as TuitionPayment[]
       })
       all.push(...page)
       if (page.length < pageSize) break
@@ -167,9 +170,9 @@ export default function TuitionPage() {
   async function loadData() {
     setLoading(true)
     setDebugInfo(null)
-    let studentsData: any[] | null = null
-    let plans: any[] = []
-    let payments: any[] = []
+    let studentsData: Student[] | null = null
+    let plans: TuitionPlan[] = []
+    let payments: TuitionPayment[] = []
     try {
       // Fetched one at a time, not in parallel — running these concurrently was
       // hitting a connection cap on some networks and silently dropping the
@@ -185,8 +188,9 @@ export default function TuitionPage() {
         return data || []
       })
       payments = await fetchAllPaidPayments()
-    } catch (e: any) {
-      setDebugInfo(`Couldn't load tuition data: ${e?.message ?? String(e)}`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setDebugInfo(`Couldn't load tuition data: ${msg}`)
       setLoading(false)
       return
     }

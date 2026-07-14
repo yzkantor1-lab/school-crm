@@ -3,6 +3,16 @@ import CommunicationForm from './CommunicationForm'
 import ContactListPanel from './ContactListPanel'
 import ComposeEmail from './ComposeEmail'
 
+type Communication = {
+  id: string
+  type: string
+  subject: string | null
+  body: string | null
+  created_at: string
+  students: { first_name: string; last_name: string } | null
+  staff: { first_name: string; last_name: string } | null
+}
+
 export default async function CommunicationsPage() {
   const supabase = await createClient()
   const [{ data: comms }, { data: students }, { data: staff }] = await Promise.all([
@@ -32,7 +42,7 @@ export default async function CommunicationsPage() {
       <div className="grid grid-cols-3 gap-6">
         <div className="col-span-2 space-y-3">
           <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">Communication Log</h2>
-          {comms?.map((c: any) => (
+          {comms?.map((c: Communication) => (
             <div key={c.id} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center gap-2">

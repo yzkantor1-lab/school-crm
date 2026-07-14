@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Search, Plus, X, User, Mail, Phone, MapPin, Tag, Heart, Grid3x3, List, Users, Layers } from 'lucide-react'
+import { Search, Plus, X, User, Mail, Phone, MapPin, Tag, Heart, Grid3x3, List, Users } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
 
 const DONOR_EXPORT_COLS = [

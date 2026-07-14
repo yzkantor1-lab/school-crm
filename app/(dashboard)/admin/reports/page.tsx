@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
-import { TrendingUp, TrendingDown, DollarSign, Filter } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
 
 type Donation = {
@@ -24,14 +24,11 @@ export default function ReportsPage() {
   const [donations, setDonations] = useState<Donation[]>([])
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [donors, setDonors] = useState<Donor[]>([])
-  const [purposes, setPurposes] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [reportType, setReportType] = useState<ReportType>('summary')
   const [filters, setFilters] = useState({
     startDate: '', endDate: '', donorId: '', minAmount: '', maxAmount: '', category: '', showArchived: false
   })
-
-  useEffect(() => { fetchAll() }, [filters.startDate, filters.endDate, filters.donorId])
 
   async function fetchAll() {
     setLoading(true)
@@ -44,18 +41,19 @@ export default function ReportsPage() {
     if (filters.startDate) eq = eq.gte('date', filters.startDate)
     if (filters.endDate) eq = eq.lte('date', filters.endDate)
 
-    const [{ data: dn }, { data: ex }, { data: dr }, { data: st }] = await Promise.all([
+    const [{ data: dn }, { data: ex }, { data: dr }] = await Promise.all([
       dq, eq,
       supabase.from('donors').select('id, name').order('name'),
-      supabase.from('donor_settings').select('donation_purposes').limit(1).maybeSingle()
     ])
 
     setDonations(dn || [])
     setExpenses(ex || [])
     setDonors(dr || [])
-    setPurposes(st?.donation_purposes || ['General Fund'])
     setLoading(false)
   }
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
+  useEffect(() => { fetchAll() }, [filters.startDate, filters.endDate, filters.donorId])
 
   const filteredDonations = donations.filter(d => {
     if (!filters.showArchived && d.archived) return false
@@ -75,28 +73,6 @@ export default function ReportsPage() {
   const totalDonations = filteredDonations.reduce((s, d) => s + Number(d.amount), 0)
   const totalExpenses = filteredExpenses.reduce((s, e) => s + Number(e.amount), 0)
   const net = totalDonations - totalExpenses
-
-  function exportCSV() {
-    let content = ''
-    if (reportType === 'donations') {
-      const h = ['Date','Donor','Purpose','Amount','Method','Category','Relationship','Email','Phone','Notes']
-      const rows = filteredDonations.map(d => [d.donation_date, d.donors.name, d.purpose, d.amount, d.donation_method, d.donors.category||'', d.donors.relationship||'', d.donors.email||'', d.donors.phone_number||'', d.notes||''])
-      content = [h, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-    } else if (reportType === 'expenses') {
-      const h = ['Date','Category','Description','Amount','Vendor','Method','Notes']
-      const rows = filteredExpenses.map(e => [e.date, e.category, e.description, e.amount, e.vendor||'', e.payment_method, e.notes||''])
-      content = [h, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-    } else {
-      const h = ['Type','Date','Description','Amount']
-      const rows = [
-        ...filteredDonations.map(d => ['Donation', d.donation_date, `${d.donors.name} - ${d.purpose}`, d.amount]),
-        ...filteredExpenses.map(e => ['Expense', e.date, `${e.category} - ${e.description}`, e.amount]),
-      ].sort((a, b) => new Date(b[1] as string).getTime() - new Date(a[1] as string).getTime())
-      content = [h, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-    }
-    const url = URL.createObjectURL(new Blob([content], { type: 'text/csv' }))
-    const a = document.createElement('a'); a.href = url; a.download = `${reportType}-report-${new Date().toISOString().split('T')[0]}.csv`; a.click()
-  }
 
   function setFilter(key: keyof typeof filters, value: string | boolean) {
     setFilters(f => ({ ...f, [key]: value }))

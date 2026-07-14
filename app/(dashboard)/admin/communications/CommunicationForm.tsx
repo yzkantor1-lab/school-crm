@@ -4,7 +4,9 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
-export default function CommunicationForm({ students, staff }: { students: any[]; staff: any[] }) {
+type Person = { id: string; first_name: string; last_name: string }
+
+export default function CommunicationForm({ students, staff }: { students: Person[]; staff: Person[] }) {
   const router = useRouter()
   const supabase = createClient()
   const [loading, setLoading] = useState(false)
