@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
 import {
@@ -54,19 +54,19 @@ export default function PledgesPage() {
     amount: '', payment_date: new Date().toISOString().split('T')[0], payment_method: 'Cash', notes: ''
   })
 
-  async function loadPledges() {
+  const loadPledges = useCallback(async () => {
     const { data } = await supabase.from('pledges').select('*, donors(name)').order('due_date', { ascending: true })
     setPledges(data || [])
     setLoading(false)
-  }
+  }, [supabase])
 
-  async function loadDonors() {
+  const loadDonors = useCallback(async () => {
     const { data } = await supabase.from('donors').select('id, name').order('name')
     setDonors(data || [])
-  }
+  }, [supabase])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
-  useEffect(() => { loadPledges(); loadDonors() }, [])
+  useEffect(() => { loadPledges(); loadDonors() }, [loadPledges, loadDonors])
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (donorSearchRef.current && !donorSearchRef.current.contains(e.target as Node)) setShowDonorDropdown(false)

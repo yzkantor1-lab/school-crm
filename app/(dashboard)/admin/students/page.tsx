@@ -101,7 +101,7 @@ export default function StudentsPage() {
       .select('id,first_name,last_name,student_id,grade_level,status,address,home_phone,father_cell,mother_cell,father_email,mother_email,parents_title,came_semester,date_of_birth')
       .order('last_name')
       .then(({ data }) => { setStudents(data || []); setLoading(false) })
-  }, [])
+  }, [supabase])
 
   const q = search.toLowerCase()
 
@@ -233,7 +233,7 @@ export default function StudentsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {filtered.map(s => <StudentRow key={s.id} s={s} showSemester={false} />)}
+              {filtered.map(s => <StudentRow key={s.id} s={s} showSemester={true} />)}
             </tbody>
           </table>
           {filtered.length === 0 && (
@@ -322,9 +322,11 @@ function StudentRow({ s, showSemester }: { s: Student; showSemester: boolean }) 
         </Link>
       </td>
       {/* Semester column: always in "All Students", only in "By Year" grouped view */}
-      <td className="px-5 py-3 hidden sm:table-cell">
-        <p className="text-slate-600 text-xs">{s.came_semester || '—'}</p>
-      </td>
+      {showSemester && (
+        <td className="px-5 py-3 hidden sm:table-cell">
+          <p className="text-slate-600 text-xs">{s.came_semester || '—'}</p>
+        </td>
+      )}
       <td className="px-5 py-3 hidden md:table-cell">
         <p className="text-slate-700 text-xs">{city || '—'}</p>
         {s.home_phone && <p className="text-slate-400 text-xs">{s.home_phone}</p>}

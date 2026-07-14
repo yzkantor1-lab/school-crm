@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Search, GraduationCap, ChevronRight, BookOpen, CalendarDays, Users } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
-import { SCHOOL_YEAR_SEMESTERS, ALL_SEMESTER_VALUES } from '@/lib/semesters'
 
 const EXPORT_COLUMNS = [
   { header: 'First Name',      key: 'first_name' },
@@ -46,21 +45,6 @@ type Alumni = {
 
 type Tab = 'all' | 'year_came' | 'year_left'
 
-function semesterSort(s: string | null): number {
-  if (!s) return 99999
-  const lower = s.toLowerCase()
-  const yearMatch = lower.match(/\d{4}/)
-  const year = yearMatch ? parseInt(yearMatch[0]) : 9999
-  const order =
-    lower.includes('elul')   ? 4 :
-    lower.includes('succos') ? 5 :
-    lower.includes('fall')   ? 4 :
-    lower.includes('winter') ? 1 :
-    lower.includes('spring') ? 2 :
-    lower.includes('summer') ? 3 : 6
-  return year * 10 + order
-}
-
 function extractYear(semValue: string | null): string {
   if (!semValue) return 'Unknown'
   const m = semValue.match(/(\d{4}[–-]\d{4})/)
@@ -87,7 +71,7 @@ export default function AlumniPage() {
       .eq('status', 'graduated')
       .order('last_name')
       .then(({ data }) => { setAlumni(data || []); setLoading(false) })
-  }, [])
+  }, [supabase])
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
@@ -35,9 +35,7 @@ export default function DonationsPage() {
     amount: '', donation_method: '', donation_date: new Date().toISOString().split('T')[0], purpose: '', notes: ''
   })
 
-  useEffect(() => { fetchSettings(); fetchDonors(); fetchDonations() }, [])
-
-  async function fetchSettings() {
+  const fetchSettings = useCallback(async () => {
     const { data } = await supabase.from('donor_settings').select('*').limit(1).maybeSingle()
     if (data) {
       const methods = data.donation_methods || ['Cash']
@@ -48,19 +46,22 @@ export default function DonationsPage() {
       setFormData(prev => ({ ...prev, donation_method: prev.donation_method || methods[0] || '', purpose: prev.purpose || purposes[0] || '' }))
       setNewDonorData(prev => ({ ...prev, category: prev.category || cats[0] || '', relationship: prev.relationship || rels[0] || '' }))
     }
-  }
+  }, [supabase])
 
-  async function fetchDonors() {
+  const fetchDonors = useCallback(async () => {
     const { data } = await supabase.from('donors').select('id, name, email').order('name')
     setDonors(data || [])
-  }
+  }, [supabase])
 
-  async function fetchDonations() {
+  const fetchDonations = useCallback(async () => {
     setLoading(true)
     const { data } = await supabase.from('donations').select('*, donors(name)').eq('archived', false).order('donation_date', { ascending: false }).limit(50)
     setDonations(data || [])
     setLoading(false)
-  }
+  }, [supabase])
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
+  useEffect(() => { fetchSettings(); fetchDonors(); fetchDonations() }, [fetchSettings, fetchDonors, fetchDonations])
 
   async function handleAddNewDonor(e: React.FormEvent) {
     e.preventDefault()

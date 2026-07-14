@@ -436,6 +436,7 @@ function BlockFields({ block, onChange }: { block: Block; onChange: (p: Partial<
     case 'image':
       return <>
         <Field label="Image URL" value={c.src} onChange={v => set('src', v)} placeholder="https://..." />
+        {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary admin-supplied URL (unknown host), fluid sizing not fixed dimensions */}
         {c.src && <img src={c.src} alt="preview" className="w-full max-h-48 object-cover rounded-xl border border-slate-200" />}
         <Field label="Alt Text" value={c.alt} onChange={v => set('alt', v)} placeholder="Describe the image..." />
         <Field label="Caption" value={c.caption} onChange={v => set('caption', v)} placeholder="Optional caption" />

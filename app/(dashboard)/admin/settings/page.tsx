@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, Suspense } from 'react'
+import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   School, Users, Heart, BadgeDollarSign, Save, Plus, X, Check,
@@ -15,21 +15,21 @@ type Tab = 'general' | 'students' | 'donors' | 'tuition' | 'email'
 function useSettings() {
   const supabase = createClient()
 
-  async function get(key: string): Promise<string> {
+  const get = useCallback(async (key: string): Promise<string> => {
     const { data } = await supabase.from('site_settings').select('value').eq('key', key).single()
     return data?.value ?? ''
-  }
+  }, [supabase])
 
-  async function set(key: string, value: string) {
+  const set = useCallback(async (key: string, value: string) => {
     await supabase.from('site_settings').upsert({ key, value }, { onConflict: 'key' })
-  }
+  }, [supabase])
 
-  async function getAll(keys: string[]): Promise<Record<string, string>> {
+  const getAll = useCallback(async (keys: string[]): Promise<Record<string, string>> => {
     const { data } = await supabase.from('site_settings').select('key,value').in('key', keys)
     const map: Record<string, string> = {}
     for (const row of data || []) map[row.key] = row.value
     return map
-  }
+  }, [supabase])
 
   function parseList(raw: string): string[] {
     try { return JSON.parse(raw) } catch { return [] }
@@ -137,7 +137,7 @@ function GeneralTab() {
     getAll(['school_name','school_email','school_phone','school_address','school_tagline','logo_url','website']).then(m => {
       setFields(prev => ({ ...prev, ...m }))
     })
-  }, [])
+  }, [getAll])
 
   async function save() {
     setSaving(true)
@@ -198,7 +198,7 @@ function StudentsTab() {
       try { setGrades(JSON.parse(m.grade_levels || '[]')) } catch { setGrades([]) }
       try { setSemesters(JSON.parse(m.semesters || '[]')) } catch { setSemesters([]) }
     })
-  }, [])
+  }, [getAll])
 
   async function save() {
     setSaving(true)
@@ -257,7 +257,7 @@ function DonorsTab() {
           setRelationships(data.relationships || [])
         }
       })
-  }, [])
+  }, [supabase])
 
   async function save() {
     setSaving(true)
@@ -311,7 +311,7 @@ function TuitionTab() {
     getAll(['academic_years']).then(m => {
       try { setYears(JSON.parse(m.academic_years || '[]')) } catch { setYears([]) }
     })
-  }, [])
+  }, [getAll])
 
   async function save() {
     setSaving(true)
@@ -368,7 +368,7 @@ function EmailTab() {
       setFromEmail(m.google_from_email || '')
       setConnected(!!m.google_refresh_token)
     })
-  }, [])
+  }, [getAll])
 
   async function saveCredentials() {
     setSaving(true)

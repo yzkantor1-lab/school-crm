@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
 import { TrendingUp, TrendingDown, DollarSign } from 'lucide-react'
@@ -30,7 +30,7 @@ export default function ReportsPage() {
     startDate: '', endDate: '', donorId: '', minAmount: '', maxAmount: '', category: '', showArchived: false
   })
 
-  async function fetchAll() {
+  const fetchAll = useCallback(async () => {
     setLoading(true)
     let dq = supabase.from('donations').select('*, donors(name, category, relationship, email, phone_number)').order('donation_date', { ascending: false })
     if (filters.startDate) dq = dq.gte('donation_date', filters.startDate)
@@ -50,10 +50,10 @@ export default function ReportsPage() {
     setExpenses(ex || [])
     setDonors(dr || [])
     setLoading(false)
-  }
+  }, [supabase, filters.startDate, filters.endDate, filters.donorId])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
-  useEffect(() => { fetchAll() }, [filters.startDate, filters.endDate, filters.donorId])
+  useEffect(() => { fetchAll() }, [fetchAll])
 
   const filteredDonations = donations.filter(d => {
     if (!filters.showArchived && d.archived) return false

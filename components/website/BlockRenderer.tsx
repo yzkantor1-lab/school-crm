@@ -121,6 +121,7 @@ function ImageBlock({ c }: { c: BlockContent }) {
   return (
     <div className={`py-6 ${isContained ? 'max-w-6xl mx-auto px-6' : ''}`}>
       <figure>
+        {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary admin-supplied URL (unknown host), fluid sizing not fixed dimensions */}
         <img
           src={c.src}
           alt={c.alt || ''}
@@ -176,6 +177,7 @@ function CardGridBlock({ c }: { c: BlockContent }) {
         {cards.map((card: CardItem, i: number) => (
           <div key={i} className="bg-white rounded-2xl border border-slate-200 overflow-hidden hover:shadow-md transition">
             {card.image && (
+              // eslint-disable-next-line @next/next/no-img-element -- arbitrary admin-supplied URL (unknown host), fluid sizing not fixed dimensions
               <img src={card.image} alt={card.title || ''} className="w-full h-48 object-cover" />
             )}
             <div className="p-6">

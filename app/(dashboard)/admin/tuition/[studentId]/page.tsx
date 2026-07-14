@@ -497,7 +497,7 @@ export default function StudentTuitionPage() {
       email: settingsMap.school_email || '',
     })
     setLoading(false)
-  }, [studentId])
+  }, [studentId, supabase])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
   useEffect(() => { load() }, [load])
@@ -527,7 +527,7 @@ export default function StudentTuitionPage() {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs a derived value into editable form state, see comment above
       setPlanForm(f => ({ ...f, total_amount: formProrated.owed.toFixed(2) }))
     }
-  }, [formProrated?.owed])
+  }, [formProrated])
 
   function onAcademicYearChange(year: string) {
     const yg = getYearGroup(year)

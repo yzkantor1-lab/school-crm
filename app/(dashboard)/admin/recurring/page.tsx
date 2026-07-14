@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
 import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight } from 'lucide-react'
@@ -25,19 +25,19 @@ export default function RecurringDonationsPage() {
     end_date: '', total_months: '', day_of_month: '1', donation_method: 'Credit card', notes: ''
   })
 
-  async function load() {
+  const load = useCallback(async () => {
     const { data } = await supabase.from('recurring_donations').select('*, donors(name)').order('start_date', { ascending: false })
     setRecurring(data || [])
     setLoading(false)
-  }
+  }, [supabase])
 
-  async function loadDonors() {
+  const loadDonors = useCallback(async () => {
     const { data } = await supabase.from('donors').select('id, name').order('name')
     setDonors(data || [])
-  }
+  }, [supabase])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
-  useEffect(() => { load(); loadDonors() }, [])
+  useEffect(() => { load(); loadDonors() }, [load, loadDonors])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

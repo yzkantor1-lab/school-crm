@@ -40,7 +40,7 @@ export default function TuitionSection({ studentId }: { studentId: string }) {
       setLoading(false)
     }
     load()
-  }, [studentId])
+  }, [studentId, supabase])
 
   if (loading) return <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5"><p className="text-slate-400 text-sm">Loading tuition…</p></div>
 

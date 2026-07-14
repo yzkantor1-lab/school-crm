@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
 import { Plus, Edit2, Trash2, Search, Archive, ArchiveRestore, Receipt } from 'lucide-react'
@@ -37,15 +37,15 @@ export default function ExpensesPage() {
     amount: '', vendor: '', payment_method: 'Cash', receipt_url: '', notes: ''
   })
 
-  async function fetchExpenses() {
+  const fetchExpenses = useCallback(async () => {
     setLoading(true)
     const { data } = await supabase.from('expenses').select('*').order('date', { ascending: false })
     setExpenses(data || [])
     setLoading(false)
-  }
+  }, [supabase])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
-  useEffect(() => { fetchExpenses() }, [])
+  useEffect(() => { fetchExpenses() }, [fetchExpenses])
 
   const filtered = expenses.filter(e => {
     if (e.archived !== showArchived) return false

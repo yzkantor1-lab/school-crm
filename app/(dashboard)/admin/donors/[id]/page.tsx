@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
@@ -36,7 +36,7 @@ export default function DonorDetailPage() {
   const [donorForm, setDonorForm] = useState({ name: '', email: '', phone_number: '', address: '', category: '', relationship: '' })
   const [donationForm, setDonationForm] = useState({ amount: '', donation_method: '', donation_date: '', purpose: '', notes: '' })
 
-  async function fetchSettings() {
+  const fetchSettings = useCallback(async () => {
     const { data } = await supabase.from('donor_settings').select('*').limit(1).maybeSingle()
     if (data) {
       setDonorCategories(data.donor_categories || ['General'])
@@ -44,9 +44,9 @@ export default function DonorDetailPage() {
       setDonationMethods(data.donation_methods || ['Cash'])
       setDonationPurposes(data.donation_purposes || ['General Fund'])
     }
-  }
+  }, [supabase])
 
-  async function fetchData() {
+  const fetchData = useCallback(async () => {
     setLoading(true)
     const [{ data: d }, { data: dn }] = await Promise.all([
       supabase.from('donors').select('*').eq('id', id).maybeSingle(),
@@ -58,13 +58,13 @@ export default function DonorDetailPage() {
     }
     setDonations(dn || [])
     setLoading(false)
-  }
+  }, [id, supabase])
 
   /* eslint-disable react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await */
   useEffect(() => {
     fetchSettings()
     fetchData()
-  }, [id])
+  }, [fetchSettings, fetchData])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   async function updateDonor() {

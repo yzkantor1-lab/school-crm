@@ -40,7 +40,7 @@ export default function NewInvoicePage() {
       setTerms(t.data ?? [])
       setCategories(c.data ?? [])
     })
-  }, [])
+  }, [supabase])
 
   const total = items.reduce((sum, i) => sum + (Number(i.quantity) * Number(i.unit_price)), 0)
 

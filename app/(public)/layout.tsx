@@ -32,6 +32,7 @@ export default async function PublicLayout({ children }: { children: React.React
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition">
             {logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element -- arbitrary admin-supplied URL (unknown host), fluid height via CSS not fixed dimensions
               <img src={logoUrl} alt={schoolName} className="h-9 w-auto object-contain" />
             ) : (
               <div className="bg-blue-700 text-white rounded-lg p-1.5">

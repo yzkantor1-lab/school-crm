@@ -20,7 +20,7 @@ export default function LoanForm({ books }: { books: Book[] }) {
 
   useEffect(() => {
     supabase.from('students').select('id, first_name, last_name').eq('status', 'active').order('last_name').then(({ data }) => setStudents(data ?? []))
-  }, [])
+  }, [supabase])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

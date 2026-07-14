@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Search, Plus, X, User, Mail, Phone, MapPin, Tag, Heart, Grid3x3, List, Users } from 'lucide-react'
@@ -50,12 +50,7 @@ export default function DonorsPage() {
     relationship: '',
   })
 
-  useEffect(() => {
-    fetchSettings()
-    fetchDonors()
-  }, [])
-
-  async function fetchSettings() {
+  const fetchSettings = useCallback(async () => {
     const { data } = await supabase
       .from('donor_settings')
       .select('donor_categories, relationships')
@@ -72,14 +67,21 @@ export default function DonorsPage() {
         relationship: prev.relationship || rels[0] || '',
       }))
     }
-  }
+  }, [supabase])
 
-  async function fetchDonors() {
+  const fetchDonors = useCallback(async () => {
     setLoading(true)
     const { data } = await supabase.from('donors').select('*').order('name')
     setDonors(data || [])
     setLoading(false)
-  }
+  }, [supabase])
+
+  /* eslint-disable react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await */
+  useEffect(() => {
+    fetchSettings()
+    fetchDonors()
+  }, [fetchSettings, fetchDonors])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   async function addDonor(e: React.FormEvent) {
     e.preventDefault()

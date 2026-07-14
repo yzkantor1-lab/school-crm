@@ -77,7 +77,7 @@ export default function ContactListPanel() {
       .select('id,first_name,last_name,status,father_email,mother_email,personal_phone,home_phone,father_cell,mother_cell')
       .order('last_name')
       .then(({ data }) => { setRows(data || []); setLoading(false) })
-  }, [])
+  }, [supabase])
 
   const filtered = useMemo(() => {
     return rows.filter(s => {

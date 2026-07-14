@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -116,13 +116,9 @@ export default function TuitionPage() {
   const [formError, setFormError] = useState('')
   const [debugInfo, setDebugInfo] = useState<string | null>(null)
 
-  useEffect(() => {
-    loadData()
-  }, [])
-
   // The connection to Supabase from some networks drops requests intermittently,
   // so every fetch here retries a few times with a short backoff before giving up.
-  async function withRetry<T>(label: string, fn: () => Promise<T>, attempts = 5): Promise<T> {
+  const withRetry = useCallback(async <T,>(label: string, fn: () => Promise<T>, attempts = 5): Promise<T> => {
     let lastErr: unknown
     for (let i = 0; i < attempts; i++) {
       try {
@@ -134,40 +130,40 @@ export default function TuitionPage() {
     }
     const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
     throw new Error(`${label} — ${msg} (after ${attempts} attempts)`)
-  }
+  }, [])
 
-  // Deliberately avoids supabase-js's .range() — it sends an HTTP Range header
-  // and expects a 206 response, which some networks/proxies mishandle for API
-  // (non-media) responses. Plain limit/offset query params avoid that header.
-  async function fetchAllPaidPayments() {
+  // Paginates with a cursor (id > lastSeenId) instead of supabase-js's .range() —
+  // .range() sends an HTTP Range header and expects a 206 response, which some
+  // networks/proxies mishandle for API (non-media) responses. Cursor pagination
+  // avoids that header entirely while still going through the normal, already-
+  // authenticated Supabase client (rather than a hand-rolled fetch with manually
+  // embedded auth headers, which is more fragile and easier for network/browser
+  // issues to trip up).
+  const fetchAllPaidPayments = useCallback(async () => {
     const pageSize = 50
     const all: TuitionPayment[] = []
-    const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    let offset = 0
+    let cursor = '00000000-0000-0000-0000-000000000000'
     while (true) {
-      const page = await withRetry(`payments page @${offset}`, async () => {
-        const params = new URLSearchParams({
-          select: 'id,tuition_plan_id,amount,status,payment_type',
-          status: 'eq.paid',
-          payment_type: 'in.(tuition,building_fund)',
-          limit: String(pageSize),
-          offset: String(offset),
-        })
-        const res = await fetch(`${baseUrl}/rest/v1/tuition_payments?${params.toString()}`, {
-          headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return (await res.json()) as TuitionPayment[]
+      const page = await withRetry(`payments page after ${cursor}`, async () => {
+        const { data, error } = await supabase
+          .from('tuition_payments')
+          .select('id,tuition_plan_id,amount,status,payment_type')
+          .eq('status', 'paid')
+          .in('payment_type', ['tuition', 'building_fund'])
+          .gt('id', cursor)
+          .order('id')
+          .limit(pageSize)
+        if (error) throw error
+        return (data || []) as TuitionPayment[]
       })
       all.push(...page)
       if (page.length < pageSize) break
-      offset += pageSize
+      cursor = page[page.length - 1].id
     }
     return all
-  }
+  }, [withRetry, supabase])
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true)
     setDebugInfo(null)
     let studentsData: Student[] | null = null
@@ -220,7 +216,13 @@ export default function TuitionPage() {
 
     setStudents(enriched)
     setLoading(false)
-  }
+  }, [supabase, withRetry, fetchAllPaidPayments])
+
+  /* eslint-disable react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await */
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   async function handleAddStudent(e: React.FormEvent) {
     e.preventDefault()
