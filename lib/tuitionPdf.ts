@@ -1,11 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- jspdf-autotable types its jsPDF document param as `any` upstream (see jspdf-autotable/dist/index.d.ts); no more precise type is available for the `doc` handle used throughout this file. */
 
-export type SchoolInfo = {
-  name: string
-  address: string
-  phone: string
-  email: string
-}
+import { drawLetterheadHeader, drawLetterheadFooter } from './letterhead'
 
 export type BillStudent = {
   first_name: string | null
@@ -35,7 +30,6 @@ export type BillPayment = {
 type SemesterRow = { label: string; dates: string; amount: number; enrolled: boolean }
 
 type BillOpts = {
-  school: SchoolInfo
   student: BillStudent
   plan: BillPlan
   payments: BillPayment[]
@@ -44,7 +38,6 @@ type BillOpts = {
 }
 
 type ReceiptOpts = {
-  school: SchoolInfo
   student: BillStudent
   plan: BillPlan
   payment: BillPayment
@@ -64,27 +57,6 @@ function paymentTypeLabel(t: string | null | undefined) {
 function docToBase64(doc: any): string {
   const dataUri = doc.output('datauristring') as string
   return dataUri.slice(dataUri.indexOf(',') + 1)
-}
-
-function drawHeader(doc: any, school: SchoolInfo, title: string) {
-  doc.setFontSize(16)
-  doc.setFont('helvetica', 'bold')
-  doc.text(school.name || 'School', 14, 18)
-  doc.setFontSize(9)
-  doc.setFont('helvetica', 'normal')
-  doc.setTextColor(120)
-  const contactLine = [school.address, school.phone, school.email].filter(Boolean).join('  ·  ')
-  if (contactLine) doc.text(contactLine, 14, 24)
-  doc.setTextColor(0)
-
-  doc.setFontSize(13)
-  doc.setFont('helvetica', 'bold')
-  doc.text(title, 14, 36)
-  doc.setFontSize(9)
-  doc.setFont('helvetica', 'normal')
-  doc.setTextColor(120)
-  doc.text(`Date: ${new Date().toLocaleDateString()}`, 196, 36, { align: 'right' })
-  doc.setTextColor(0)
 }
 
 // ── Tuition Bill / Statement ────────────────────────────────────────────────
@@ -107,9 +79,8 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
   const buildingFundBalance = buildingFund - buildingFundPaid
   const totalBalance = tuitionBalance + buildingFundBalance
 
-  drawHeader(doc, opts.school, 'TUITION STATEMENT')
+  let y = drawLetterheadHeader(doc, 'TUITION STATEMENT')
 
-  let y = 46
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
   doc.text(name, 14, y)
@@ -205,6 +176,8 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
     })
   }
 
+  drawLetterheadFooter(doc)
+
   const filename = `tuition-statement-${name.replace(/\s+/g, '-').toLowerCase()}-${(opts.plan.academic_year || '').replace(/\s+/g, '')}.pdf`
   return { doc, filename }
 }
@@ -229,14 +202,14 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
   const name = studentName(opts.student)
   const isDonation = opts.payment.payment_type === 'donation'
 
-  drawHeader(doc, opts.school, isDonation ? 'DONATION RECEIPT' : 'PAYMENT RECEIPT')
+  const headerY = drawLetterheadHeader(doc, isDonation ? 'DONATION RECEIPT' : 'PAYMENT RECEIPT')
   const typeLabel = paymentTypeLabel(opts.payment.payment_type)
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
-  doc.text(name, 14, 46)
+  doc.text(name, 14, headerY)
   doc.setFont('helvetica', 'normal')
-  doc.text(`Academic Year: ${opts.plan.academic_year || '—'}`, 14, 51)
+  doc.text(`Academic Year: ${opts.plan.academic_year || '—'}`, 14, headerY + 5)
 
   const rows: [string, string][] = [
     ['Amount', `$${Number(opts.payment.amount).toFixed(2)}`],
@@ -247,7 +220,7 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
   rows.push([isDonation ? 'Type' : 'Applied To', typeLabel])
 
   autoTable(doc, {
-    startY: 60,
+    startY: headerY + 14,
     body: rows,
     theme: 'plain',
     styles: { fontSize: 10, cellPadding: 3 },
@@ -271,6 +244,9 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
   doc.setFontSize(9)
   doc.setTextColor(120)
   doc.text(isDonation ? 'Thank you for your generous donation.' : 'Thank you for your payment.', 14, y + 4)
+  doc.setTextColor(0)
+
+  drawLetterheadFooter(doc)
 
   const dateForFilename = opts.payment.payment_date || opts.payment.due_date
   const filename = `${isDonation ? 'donation' : 'payment'}-receipt-${name.replace(/\s+/g, '-').toLowerCase()}-${dateForFilename}.pdf`

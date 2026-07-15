@@ -128,40 +128,31 @@ export default function TuitionPage() {
         if (i < attempts - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)))
       }
     }
-    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
+    // Postgrest/Supabase errors are plain objects with a `message` (and often
+    // `code`/`details`/`hint`), not `Error` instances — String(err) on those
+    // just gives "[object Object]", so pull `.message` out explicitly.
+    let msg: string
+    if (lastErr instanceof Error) msg = lastErr.message
+    else if (lastErr && typeof lastErr === 'object' && 'message' in lastErr) msg = String((lastErr as { message: unknown }).message)
+    else msg = String(lastErr)
     throw new Error(`${label} — ${msg} (after ${attempts} attempts)`)
   }, [])
 
-  // Paginates with a cursor (id > lastSeenId) instead of supabase-js's .range() —
-  // .range() sends an HTTP Range header and expects a 206 response, which some
-  // networks/proxies mishandle for API (non-media) responses. Cursor pagination
-  // avoids that header entirely while still going through the normal, already-
-  // authenticated Supabase client (rather than a hand-rolled fetch with manually
-  // embedded auth headers, which is more fragile and easier for network/browser
-  // issues to trip up).
+  // Routed through our own /api/tuition/payments endpoint (server-side), not
+  // fetched from Supabase directly in the browser — some ad blockers / privacy
+  // extensions block requests whose URL contains "payment", which was silently
+  // killing this one fetch while sibling requests (students, tuition_plans)
+  // on the same page went through fine.
   const fetchAllPaidPayments = useCallback(async () => {
-    const pageSize = 50
-    const all: TuitionPayment[] = []
-    let cursor = '00000000-0000-0000-0000-000000000000'
-    while (true) {
-      const page = await withRetry(`payments page after ${cursor}`, async () => {
-        const { data, error } = await supabase
-          .from('tuition_payments')
-          .select('id,tuition_plan_id,amount,status,payment_type')
-          .eq('status', 'paid')
-          .in('payment_type', ['tuition', 'building_fund'])
-          .gt('id', cursor)
-          .order('id')
-          .limit(pageSize)
-        if (error) throw error
-        return (data || []) as TuitionPayment[]
-      })
-      all.push(...page)
-      if (page.length < pageSize) break
-      cursor = page[page.length - 1].id
-    }
-    return all
-  }, [withRetry, supabase])
+    return withRetry('payments', async () => {
+      const res = await fetch('/api/tuition/payments')
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.error || `HTTP ${res.status}`)
+      }
+      return (await res.json()) as TuitionPayment[]
+    })
+  }, [withRetry])
 
   const loadData = useCallback(async () => {
     setLoading(true)

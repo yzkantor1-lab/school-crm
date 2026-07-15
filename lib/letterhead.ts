@@ -1,0 +1,94 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- jsPDF's document type is `any` upstream (see lib/tuitionPdf.ts for the same note); no more precise type is available for the `doc` handle used here. */
+
+// Official letterhead for Yeshiva Nesiv HaTalmud (ישיבה נתיב התלמוד), matching
+// the school's letterhead stationery. jsPDF's built-in fonts don't support
+// Hebrew glyphs, so the letterhead (which is mostly Hebrew) is rendered onto
+// an HTML canvas — which uses the browser's own font engine and handles
+// Hebrew natively — and the result is embedded into the PDF as an image.
+// Only works in the browser (canvas requires `document`); called exclusively
+// from client-side PDF generation.
+
+const LETTERHEAD_WIDTH = 700
+const LETTERHEAD_HEIGHT = 150
+const LETTERHEAD_ASPECT_RATIO = LETTERHEAD_HEIGHT / LETTERHEAD_WIDTH
+
+export const LETTERHEAD_FOOTER_LINE1 = '(732) 800-1011  •  nesivhatalmud@gmail.com'
+export const LETTERHEAD_FOOTER_LINE2 = 'Mailing Address: 700 5th Ave, Toms River, NJ 08757'
+
+let cachedLetterheadDataUrl: string | null = null
+
+function renderLetterheadCanvas(): string {
+  const scale = 3
+  const canvas = document.createElement('canvas')
+  canvas.width = LETTERHEAD_WIDTH * scale
+  canvas.height = LETTERHEAD_HEIGHT * scale
+  const ctx = canvas.getContext('2d')!
+  ctx.scale(scale, scale)
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, LETTERHEAD_WIDTH, LETTERHEAD_HEIGHT)
+  ctx.fillStyle = '#000000'
+
+  const cx = LETTERHEAD_WIDTH / 2
+
+  ctx.textAlign = 'center'
+  ctx.font = 'bold 32px Arial, sans-serif'
+  ctx.fillText('ישיבה נתיב התלמוד', cx, 42)
+
+  ctx.font = '17px Arial, sans-serif'
+  ctx.fillText('1011 Cross St. • Lakewood NJ 08701', cx, 68)
+
+  ctx.beginPath()
+  ctx.moveTo(80, 84)
+  ctx.lineTo(LETTERHEAD_WIDTH - 80, 84)
+  ctx.strokeStyle = '#000000'
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+
+  ctx.textAlign = 'left'
+  ctx.font = '17px Arial, sans-serif'
+  ctx.fillText('הרב משה ריידעל', 80, 110)
+  ctx.fillText('ראש הישיבה', 80, 134)
+
+  return canvas.toDataURL('image/png')
+}
+
+function getLetterheadImage(): string {
+  if (!cachedLetterheadDataUrl) cachedLetterheadDataUrl = renderLetterheadCanvas()
+  return cachedLetterheadDataUrl
+}
+
+// Draws the letterhead image + a title/date row at the top of a jsPDF doc.
+// Returns the y-coordinate (mm) where body content should start.
+export function drawLetterheadHeader(doc: any, title: string): number {
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const imgWidth = 130
+  const imgHeight = imgWidth * LETTERHEAD_ASPECT_RATIO
+  const imgX = (pageWidth - imgWidth) / 2
+  doc.addImage(getLetterheadImage(), 'PNG', imgX, 8, imgWidth, imgHeight)
+
+  const titleY = 8 + imgHeight + 10
+  doc.setFontSize(13)
+  doc.setFont('helvetica', 'bold')
+  doc.text(title, 14, titleY)
+  doc.setFontSize(9)
+  doc.setFont('helvetica', 'normal')
+  doc.setTextColor(120)
+  doc.text(`Date: ${new Date().toLocaleDateString()}`, pageWidth - 14, titleY, { align: 'right' })
+  doc.setTextColor(0)
+
+  return titleY + 10
+}
+
+// Draws the letterhead's footer contact info near the bottom of the current page.
+export function drawLetterheadFooter(doc: any) {
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const y = pageHeight - 16
+  doc.setFontSize(8)
+  doc.setFont('helvetica', 'normal')
+  doc.setTextColor(120)
+  doc.text(LETTERHEAD_FOOTER_LINE1, pageWidth / 2, y, { align: 'center' })
+  doc.text(LETTERHEAD_FOOTER_LINE2, pageWidth / 2, y + 5, { align: 'center' })
+  doc.setTextColor(0)
+}

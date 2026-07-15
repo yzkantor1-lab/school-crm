@@ -6,8 +6,11 @@ import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
 import {
   ArrowLeft, Edit2, Save, X, Trash2, DollarSign, Calendar,
-  CreditCard, FileText, User, Mail, Phone, MapPin, Tag, Heart, Archive, ArchiveRestore
+  CreditCard, FileText, User, Mail, Phone, MapPin, Tag, Heart, Archive, ArchiveRestore,
+  Printer
 } from 'lucide-react'
+import { generateDonationReceiptPDF, getDonationReceiptPdfBase64 } from '@/lib/donationPdf'
+import EmailPdfModal from '@/components/EmailPdfModal'
 
 type Donor = {
   id: string; name: string; email: string | null; phone_number: string | null
@@ -35,6 +38,12 @@ export default function DonorDetailPage() {
   const [showArchived, setShowArchived] = useState(false)
   const [donorForm, setDonorForm] = useState({ name: '', email: '', phone_number: '', address: '', category: '', relationship: '' })
   const [donationForm, setDonationForm] = useState({ amount: '', donation_method: '', donation_date: '', purpose: '', notes: '' })
+  const [emailModal, setEmailModal] = useState<{
+    defaultRecipients: string[]
+    defaultSubject: string
+    defaultBody: string
+    buildAttachment: () => Promise<{ filename: string; base64: string }>
+  } | null>(null)
 
   const fetchSettings = useCallback(async () => {
     const { data } = await supabase.from('donor_settings').select('*').limit(1).maybeSingle()
@@ -105,6 +114,34 @@ export default function DonorDetailPage() {
   async function toggleArchive(donationId: string, archived: boolean) {
     await supabase.from('donations').update({ archived: !archived }).eq('id', donationId)
     fetchData()
+  }
+
+  function receiptOpts(donation: Donation) {
+    return {
+      donor: { name: donor!.name, email: donor!.email, address: donor!.address },
+      donation: {
+        amount: Number(donation.amount),
+        donation_date: donation.donation_date,
+        donation_method: donation.donation_method,
+        purpose: donation.purpose,
+        notes: donation.notes,
+      },
+    }
+  }
+
+  function printReceipt(donation: Donation) {
+    if (!donor) return
+    generateDonationReceiptPDF(receiptOpts(donation))
+  }
+
+  function emailReceipt(donation: Donation) {
+    if (!donor) return
+    setEmailModal({
+      defaultRecipients: donor.email ? [donor.email] : [],
+      defaultSubject: `Donation Receipt — ${donor.name}`,
+      defaultBody: `Hi,\n\nPlease find attached your receipt for your generous donation of ${formatCurrency(Number(donation.amount))} on ${new Date(donation.donation_date + 'T00:00:00').toLocaleDateString()}.\n\nThank you for your support.`,
+      buildAttachment: () => getDonationReceiptPdfBase64(receiptOpts(donation)),
+    })
   }
 
   const shown = donations.filter(d => showArchived ? d.archived : !d.archived)
@@ -239,6 +276,10 @@ export default function DonorDetailPage() {
                       {donation.notes && <p className="text-sm text-slate-500 mt-1">{donation.notes}</p>}
                     </div>
                     <div className="flex gap-1.5 shrink-0">
+                      <button onClick={() => printReceipt(donation)}
+                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="Print receipt"><Printer size={15} /></button>
+                      <button onClick={() => emailReceipt(donation)}
+                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="Email receipt"><Mail size={15} /></button>
                       <button onClick={() => { setEditingDonationId(donation.id); setDonationForm({ amount: donation.amount.toString(), donation_method: donation.donation_method, donation_date: donation.donation_date, purpose: donation.purpose, notes: donation.notes || '' }) }}
                         className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"><Edit2 size={15} /></button>
                       <button onClick={() => toggleArchive(donation.id, donation.archived)}
@@ -253,6 +294,16 @@ export default function DonorDetailPage() {
           </div>
         )}
       </div>
+
+      {emailModal && (
+        <EmailPdfModal
+          onClose={() => setEmailModal(null)}
+          defaultRecipients={emailModal.defaultRecipients}
+          defaultSubject={emailModal.defaultSubject}
+          defaultBody={emailModal.defaultBody}
+          buildAttachment={emailModal.buildAttachment}
+        />
+      )}
     </div>
   )
 }

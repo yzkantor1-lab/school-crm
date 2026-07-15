@@ -13,7 +13,6 @@ import { SCHOOL_YEAR_SEMESTERS } from '@/lib/semesters'
 import {
   generateTuitionBillPDF, generatePaymentReceiptPDF,
   getTuitionBillPdfBase64, getPaymentReceiptPdfBase64,
-  type SchoolInfo,
 } from '@/lib/tuitionPdf'
 import EmailPdfModal from '@/components/EmailPdfModal'
 
@@ -456,7 +455,6 @@ export default function StudentTuitionPage() {
   const [student, setStudent]   = useState<Student | null>(null)
   const [plans, setPlans]       = useState<TuitionPlan[]>([])
   const [payments, setPayments] = useState<TuitionPayment[]>([])
-  const [schoolInfo, setSchoolInfo] = useState<SchoolInfo>({ name: '', address: '', phone: '', email: '' })
   const [emailModal, setEmailModal] = useState<{
     defaultRecipients: string[]
     defaultSubject: string
@@ -479,23 +477,14 @@ export default function StudentTuitionPage() {
   const [savingPayment, setSavingPayment]     = useState(false)
 
   const load = useCallback(async () => {
-    const [{ data: s }, { data: p }, { data: pay }, { data: settings }] = await Promise.all([
+    const [{ data: s }, { data: p }, { data: pay }] = await Promise.all([
       supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,father_email,mother_email').eq('id', studentId).single(),
       supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
       supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
-      supabase.from('site_settings').select('key,value').in('key', ['school_name', 'school_address', 'school_phone', 'school_email']),
     ])
     setStudent(s)
     setPlans(p || [])
     setPayments(pay || [])
-    const settingsMap: Record<string, string> = {}
-    for (const row of settings || []) settingsMap[row.key] = row.value
-    setSchoolInfo({
-      name: settingsMap.school_name || '',
-      address: settingsMap.school_address || '',
-      phone: settingsMap.school_phone || '',
-      email: settingsMap.school_email || '',
-    })
     setLoading(false)
   }, [studentId, supabase])
 
@@ -721,7 +710,6 @@ export default function StudentTuitionPage() {
       : undefined
 
     return {
-      school: schoolInfo,
       student: student!,
       plan,
       payments: planPayments,
@@ -736,7 +724,6 @@ export default function StudentTuitionPage() {
     const balanceAfter = payment.payment_type === 'building_fund' ? bal.buildingFundBalance : bal.tuitionBalance
 
     return {
-      school: schoolInfo,
       student: student!,
       plan,
       payment,
