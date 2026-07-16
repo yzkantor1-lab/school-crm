@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- jspdf-autotable types its jsPDF document param as `any` upstream (see jspdf-autotable/dist/index.d.ts); no more precise type is available for the `doc` handle used throughout this file. */
 
 import { drawLetterheadHeader, drawLetterheadFooter } from './letterhead'
+import { openPreviewTab, showPdfPreview } from './pdfPreview'
 
 export type BillStudent = {
   first_name: string | null
@@ -207,8 +208,9 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
 }
 
 export async function generateTuitionBillPDF(opts: BillOpts) {
-  const { doc, filename } = await buildBillDoc(opts)
-  doc.save(filename)
+  const win = openPreviewTab()
+  const { doc } = await buildBillDoc(opts)
+  showPdfPreview(doc, win)
 }
 
 export async function getTuitionBillPdfBase64(opts: BillOpts): Promise<{ base64: string; filename: string }> {
@@ -278,8 +280,9 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
 }
 
 export async function generatePaymentReceiptPDF(opts: ReceiptOpts) {
-  const { doc, filename } = await buildReceiptDoc(opts)
-  doc.save(filename)
+  const win = openPreviewTab()
+  const { doc } = await buildReceiptDoc(opts)
+  showPdfPreview(doc, win)
 }
 
 export async function getPaymentReceiptPdfBase64(opts: ReceiptOpts): Promise<{ base64: string; filename: string }> {

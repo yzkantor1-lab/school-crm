@@ -277,7 +277,7 @@ export default function DonorDetailPage() {
                     </div>
                     <div className="flex gap-1.5 shrink-0">
                       <button onClick={() => printReceipt(donation)}
-                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="Print receipt"><Printer size={15} /></button>
+                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="View receipt"><Printer size={15} /></button>
                       <button onClick={() => emailReceipt(donation)}
                         className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="Email receipt"><Mail size={15} /></button>
                       <button onClick={() => { setEditingDonationId(donation.id); setDonationForm({ amount: donation.amount.toString(), donation_method: donation.donation_method, donation_date: donation.donation_date, purpose: donation.purpose, notes: donation.notes || '' }) }}

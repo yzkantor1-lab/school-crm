@@ -1265,7 +1265,7 @@ export default function StudentTuitionPage() {
                       Add Payment
                     </button>
                     <button onClick={e => { e.stopPropagation(); printBill(plan, planPayments) }}
-                      className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Print bill / statement">
+                      className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="View bill / statement">
                       <Printer size={14} />
                     </button>
                     <button onClick={e => { e.stopPropagation(); emailBill(plan, planPayments) }}
@@ -1433,7 +1433,7 @@ export default function StudentTuitionPage() {
                                     <div className="flex items-center gap-1 justify-end">
                                       {pay.status === 'paid' && (
                                         <>
-                                          <button onClick={() => printReceipt(plan, pay)} className="p-1 text-slate-300 hover:text-blue-600 transition-colors" title="Print receipt">
+                                          <button onClick={() => printReceipt(plan, pay)} className="p-1 text-slate-300 hover:text-blue-600 transition-colors" title="View receipt">
                                             <Receipt size={13} />
                                           </button>
                                           <button onClick={() => emailReceipt(plan, pay)} className="p-1 text-slate-300 hover:text-blue-600 transition-colors" title="Email receipt">
