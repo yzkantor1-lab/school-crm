@@ -83,11 +83,13 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
 
   let y = drawLetterheadHeader(doc, 'TUITION STATEMENT')
 
-  if (totalBalance > 0) {
+  {
     const title = opts.student.parents_title ? `${opts.student.parents_title} ` : ''
     const salutation = `Dear ${title}${opts.student.last_name || ''},`
     const paragraphs = [
-      `You currently have an outstanding balance of $${totalBalance.toFixed(2)} on your tuition account. Please remit your payment as soon as possible.`,
+      totalBalance > 0
+        ? `You currently have an outstanding balance of $${totalBalance.toFixed(2)} on your tuition account. Please remit your payment as soon as possible.`
+        : 'Your tuition account is paid in full. Thank you!',
       'If you have any questions, please call Rabbi Kantor at 732-800-1011, extension 2.',
       'Thank you.',
     ]
@@ -103,7 +105,14 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
       doc.text(lines, 14, y)
       y += lines.length * 5 + 4
     }
+
+    // A visual break between the sign-off above and the statement details
+    // below, so the details don't read as part of the letter (e.g. the
+    // student's own name right under "Thank you." looking like a signature).
     y += 4
+    doc.setDrawColor(220)
+    doc.line(14, y, doc.internal.pageSize.getWidth() - 14, y)
+    y += 10
   }
 
   doc.setFontSize(10)
@@ -149,7 +158,7 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
   pushRow('Tuition Paid', `$${tuitionPaid.toFixed(2)}`)
   pushRow('Tuition Balance', tuitionBalance > 0 ? `$${tuitionBalance.toFixed(2)}` : 'Paid in Full', true)
 
-  if (buildingFund > 0) {
+  if (buildingFund > 0 || buildingFundPaid > 0) {
     pushRow('Building Fund Charge', `$${buildingFund.toFixed(2)}`)
     pushRow('Building Fund Paid', `$${buildingFundPaid.toFixed(2)}`)
     pushRow('Building Fund Balance', buildingFundBalance > 0 ? `$${buildingFundBalance.toFixed(2)}` : 'Paid in Full', true)
@@ -181,7 +190,7 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
   if (billablePayments.length) {
     doc.setFontSize(10)
     doc.setFont('helvetica', 'bold')
-    doc.text('Payment History', 14, y)
+    doc.text('Payment Breakdown', 14, y)
     y += 4
     autoTable(doc, {
       startY: y,
