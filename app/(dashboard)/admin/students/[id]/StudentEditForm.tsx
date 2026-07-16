@@ -25,9 +25,11 @@ const CONTACT_FIELDS = [
 
 const PARENT_FIELDS = [
   field('Parents Title', 'parents_title'),
+  field('Father Name', 'father_name'),
   field('Father Cell', 'father_cell'),
-  field('Mother Cell', 'mother_cell'),
   field('Father Email', 'father_email'),
+  field('Mother Name', 'mother_name'),
+  field('Mother Cell', 'mother_cell'),
   field('Mother Email', 'mother_email'),
 ]
 

@@ -11,9 +11,11 @@ const EXPORT_COLUMNS = [
   { header: 'Last Name',     key: 'last_name' },
   { header: 'Address',       key: 'address' },
   { header: 'Home Phone',    key: 'home_phone' },
+  { header: 'Father Name',   key: 'father_name' },
   { header: 'Father Cell',   key: 'father_cell' },
-  { header: 'Mother Cell',   key: 'mother_cell' },
   { header: 'Father Email',  key: 'father_email' },
+  { header: 'Mother Name',   key: 'mother_name' },
+  { header: 'Mother Cell',   key: 'mother_cell' },
   { header: 'Mother Email',  key: 'mother_email' },
   { header: 'Parents Title', key: 'parents_title' },
   { header: 'Semester',      key: 'came_semester' },
@@ -30,9 +32,11 @@ type Student = {
   status: string | null
   address: string | null
   home_phone: string | null
+  father_name: string | null
   father_cell: string | null
-  mother_cell: string | null
   father_email: string | null
+  mother_name: string | null
+  mother_cell: string | null
   mother_email: string | null
   parents_title: string | null
   came_semester: string | null
@@ -98,7 +102,7 @@ export default function StudentsPage() {
   useEffect(() => {
     supabase
       .from('students')
-      .select('id,first_name,last_name,student_id,grade_level,status,address,home_phone,father_cell,mother_cell,father_email,mother_email,parents_title,came_semester,date_of_birth')
+      .select('id,first_name,last_name,student_id,grade_level,status,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title,came_semester,date_of_birth')
       .order('last_name')
       .then(({ data }) => { setStudents(data || []); setLoading(false) })
   }, [supabase])
@@ -113,7 +117,8 @@ export default function StudentsPage() {
     if (!q) return byStatus
     return byStatus.filter(s =>
       [s.first_name, s.last_name, s.address, s.home_phone,
-       s.father_cell, s.mother_cell, s.father_email, s.mother_email,
+       s.father_name, s.father_cell, s.father_email,
+       s.mother_name, s.mother_cell, s.mother_email,
        s.student_id, s.came_semester, s.parents_title]
       .some(v => v?.toLowerCase().includes(q))
     )
@@ -332,11 +337,13 @@ function StudentRow({ s, showSemester }: { s: Student; showSemester: boolean }) 
         {s.home_phone && <p className="text-slate-400 text-xs">{s.home_phone}</p>}
       </td>
       <td className="px-5 py-3 hidden lg:table-cell">
-        <p className="text-slate-700 text-xs">{s.father_cell || '—'}</p>
+        <p className="text-slate-700 text-xs font-medium">{s.father_name || '—'}</p>
+        <p className="text-slate-500 text-xs">{s.father_cell || ''}</p>
         {s.father_email && <p className="text-slate-400 text-xs truncate max-w-[160px]">{s.father_email}</p>}
       </td>
       <td className="px-5 py-3 hidden lg:table-cell">
-        <p className="text-slate-700 text-xs">{s.mother_cell || '—'}</p>
+        <p className="text-slate-700 text-xs font-medium">{s.mother_name || '—'}</p>
+        <p className="text-slate-500 text-xs">{s.mother_cell || ''}</p>
         {s.mother_email && <p className="text-slate-400 text-xs truncate max-w-[160px]">{s.mother_email}</p>}
       </td>
       <td className="px-5 py-3">
