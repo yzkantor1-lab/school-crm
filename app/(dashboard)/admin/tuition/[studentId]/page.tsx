@@ -1306,6 +1306,9 @@ export default function StudentTuitionPage() {
                     {plan.reminder_note && rs !== 'none' && (
                       <p className="text-xs text-amber-600 mt-0.5">{plan.reminder_note}</p>
                     )}
+                    {plan.notes && (
+                      <p className="text-xs text-slate-500 mt-0.5 italic">Note: {plan.notes}</p>
+                    )}
                   </div>
 
                   {/* Progress bar */}
