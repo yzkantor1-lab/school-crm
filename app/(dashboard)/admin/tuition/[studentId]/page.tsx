@@ -1280,6 +1280,9 @@ export default function StudentTuitionPage() {
                       <span>Balance: <span className={`font-medium ${bal.tuitionBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>
                         {bal.tuitionBalance > 0 ? formatCurrency(bal.tuitionBalance) : 'Paid in Full'}
                       </span></span>
+                      {plan.preferred_payment_method && (
+                        <span>Method: <span className="text-slate-700 font-medium">{paymentMethodLabel(plan.preferred_payment_method)}</span></span>
+                      )}
                     </div>
                     {bal.buildingFund > 0 && (
                       <div className="flex items-center gap-4 mt-1 text-sm text-slate-500 flex-wrap">
