@@ -7,13 +7,13 @@ import { createBrowserClient } from '@supabase/ssr'
 // Non-network failures (4xx/5xx HTTP responses) are untouched — fetch() only
 // throws on true network errors, so normal error handling downstream still works.
 async function retryingFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const attempts = 3
+  const attempts = 5
   for (let i = 0; i < attempts; i++) {
     try {
       return await fetch(input, init)
     } catch (err) {
       if (i === attempts - 1) throw err
-      await new Promise(resolve => setTimeout(resolve, 400 * (i + 1)))
+      await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)))
     }
   }
   throw new Error('unreachable')

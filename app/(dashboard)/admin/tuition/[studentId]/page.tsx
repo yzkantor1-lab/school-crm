@@ -472,6 +472,7 @@ export default function StudentTuitionPage() {
     buildAttachment: () => Promise<{ filename: string; base64: string }>
   } | null>(null)
   const [loading, setLoading]   = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [expandedPlan, setExpandedPlan] = useState<string | null>(null)
 
   const [showAddPlan, setShowAddPlan]   = useState(false)
@@ -487,14 +488,22 @@ export default function StudentTuitionPage() {
   const [savingPayment, setSavingPayment]     = useState(false)
 
   const load = useCallback(async () => {
-    const [{ data: s }, { data: p }, { data: pay }] = await Promise.all([
-      supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title').eq('id', studentId).single(),
-      supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
-      supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
-    ])
-    setStudent(s)
-    setPlans(p || [])
-    setPayments(pay || [])
+    setLoadError(false)
+    try {
+      const [{ data: s }, { data: p }, { data: pay }] = await Promise.all([
+        supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title').eq('id', studentId).single(),
+        supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
+        supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
+      ])
+      setStudent(s)
+      setPlans(p || [])
+      setPayments(pay || [])
+    } catch {
+      // Network-level fetch failure (flaky connection, ad blocker) that
+      // survived the Supabase client's own retries — surface a retry
+      // affordance instead of leaving an unhandled console error.
+      setLoadError(true)
+    }
     setLoading(false)
   }, [studentId, supabase])
 
@@ -777,6 +786,15 @@ export default function StudentTuitionPage() {
   }
 
   if (loading) return <div className="text-center py-12 text-slate-400 text-sm">Loading…</div>
+  if (loadError) return (
+    <div className="text-center py-12 text-sm space-y-3">
+      <p className="text-slate-400">Couldn&apos;t load this page. Check your connection and try again.</p>
+      <button onClick={() => { setLoading(true); load() }}
+        className="text-blue-600 hover:text-blue-700 font-medium px-4 py-2 rounded-lg border border-blue-200 hover:bg-blue-50 transition-colors">
+        Retry
+      </button>
+    </div>
+  )
   if (!student) return <div className="text-center py-12 text-slate-400 text-sm">Student not found.</div>
 
   return (
