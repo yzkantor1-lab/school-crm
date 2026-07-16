@@ -17,6 +17,7 @@ export type BillPlan = {
   discount_amount: number | null
   building_fund_amount: number | null
   payment_structure: string | null
+  payment_structure_custom: string | null
 }
 
 export type BillPayment = {
@@ -136,9 +137,12 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
     })
     y = (doc as any).lastAutoTable.finalY + 8
   } else if (opts.plan.payment_structure) {
+    const structureText = opts.plan.payment_structure === 'custom'
+      ? (opts.plan.payment_structure_custom || 'Custom')
+      : `${opts.plan.payment_structure.charAt(0).toUpperCase()}${opts.plan.payment_structure.slice(1)}`
     doc.setFont('helvetica', 'normal')
     doc.text(
-      `Payment Structure: ${opts.plan.payment_structure.charAt(0).toUpperCase()}${opts.plan.payment_structure.slice(1)}`,
+      `Payment Structure: ${structureText}`,
       14, y,
     )
     y += 8

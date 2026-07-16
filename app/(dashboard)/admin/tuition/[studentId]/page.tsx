@@ -43,6 +43,7 @@ type TuitionPlan = {
   academic_year: string
   total_amount: number
   payment_structure: string
+  payment_structure_custom: string | null
   payment_amount: number
   payment_day: number | null
   start_date: string
@@ -90,7 +91,12 @@ const PAYMENT_METHODS: { value: string; label: string }[] = [
   { value: 'other',         label: 'Other' },
 ]
 
-const PAYMENT_STRUCTURES = ['monthly', 'quarterly', 'semester', 'annual']
+const PAYMENT_STRUCTURES = ['monthly', 'quarterly', 'semester', 'annual', 'custom']
+
+function structureLabel(plan: Pick<TuitionPlan, 'payment_structure' | 'payment_structure_custom'>) {
+  if (plan.payment_structure === 'custom') return plan.payment_structure_custom || 'Custom'
+  return plan.payment_structure
+}
 const STATUSES = ['pending', 'paid', 'overdue', 'waived'] as const
 
 // Tuition and Building Fund are tracked as separate charges/balances that both
@@ -442,6 +448,7 @@ const BLANK_PLAN_FORM = {
   academic_year: '',
   total_amount: '',
   payment_structure: 'monthly',
+  payment_structure_custom: '',
   payment_amount: '',
   payment_day: '',
   start_date: '',
@@ -598,6 +605,7 @@ export default function StudentTuitionPage() {
       academic_year: plan.academic_year ?? '',
       total_amount: String(plan.total_amount ?? ''),
       payment_structure: plan.payment_structure ?? 'monthly',
+      payment_structure_custom: plan.payment_structure_custom || '',
       payment_amount: String(plan.payment_amount ?? ''),
       payment_day: plan.payment_day ? String(plan.payment_day) : '',
       start_date: plan.start_date ?? '',
@@ -629,6 +637,7 @@ export default function StudentTuitionPage() {
       academic_year: planForm.academic_year || null,
       total_amount: formProrated ? formProrated.owed : toNum(planForm.total_amount),
       payment_structure: planForm.payment_structure || null,
+      payment_structure_custom: planForm.payment_structure === 'custom' ? (planForm.payment_structure_custom || null) : null,
       payment_amount: toNum(planForm.payment_amount),
       payment_day: planForm.payment_day ? parseInt(planForm.payment_day) : null,
       start_date: planForm.start_date || null,
@@ -1159,6 +1168,12 @@ export default function StudentTuitionPage() {
                   <option value="">— select —</option>
                   {PAYMENT_STRUCTURES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
                 </select>
+                {planForm.payment_structure === 'custom' && (
+                  <input value={planForm.payment_structure_custom}
+                    onChange={e => setPlanForm(f => ({ ...f, payment_structure_custom: e.target.value }))}
+                    placeholder="e.g. 3 Lump Sums, 1 Lump Sum"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm mt-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">Payment Amount (per installment)</label>
@@ -1270,7 +1285,7 @@ export default function StudentTuitionPage() {
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${statusBadge(plan.status)}`}>
                         {plan.status}
                       </span>
-                      <span className="text-xs text-slate-400 capitalize">{plan.payment_structure}</span>
+                      <span className="text-xs text-slate-400 capitalize">{structureLabel(plan)}</span>
                       {plan.preferred_payment_method && (
                         <span className="text-xs text-slate-400">· {paymentMethodLabel(plan.preferred_payment_method)}</span>
                       )}
