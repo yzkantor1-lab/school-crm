@@ -723,7 +723,7 @@ export default function StudentTuitionPage() {
     load()
   }
 
-  function billArgs(plan: TuitionPlan, planPayments: TuitionPayment[]) {
+  function billArgs(plan: TuitionPlan, planPayments: TuitionPayment[], extraNote?: string) {
     const yearGroup = getYearGroup(plan.academic_year)
     const prorated = proratedInfo(plan.yearly_amount, plan.plan_came_semester || '1', plan.plan_left_semester || '3', yearGroup)
     const semesterRows = prorated && yearGroup
@@ -743,10 +743,11 @@ export default function StudentTuitionPage() {
       payments: planPayments,
       semesterRows,
       paymentMethodLabel,
+      extraNote,
     }
   }
 
-  function receiptArgs(plan: TuitionPlan, payment: TuitionPayment) {
+  function receiptArgs(plan: TuitionPlan, payment: TuitionPayment, extraNote?: string) {
     const planPayments = payments.filter(p => p.tuition_plan_id === plan.id)
     const bal = planBalances(plan, planPayments)
     const balanceAfter = payment.payment_type === 'building_fund' ? bal.buildingFundBalance : bal.tuitionBalance
@@ -757,40 +758,45 @@ export default function StudentTuitionPage() {
       payment,
       balanceAfter,
       paymentMethodLabel,
+      extraNote,
     }
   }
 
   function printBill(plan: TuitionPlan, planPayments: TuitionPayment[]) {
     if (!student) return
-    generateTuitionBillPDF(billArgs(plan, planPayments))
+    const note = prompt('Add a note to this statement? (optional)') || undefined
+    generateTuitionBillPDF(billArgs(plan, planPayments, note))
   }
 
   function printReceipt(plan: TuitionPlan, payment: TuitionPayment) {
     if (!student) return
-    generatePaymentReceiptPDF(receiptArgs(plan, payment))
+    const note = prompt('Add a note to this receipt? (optional)') || undefined
+    generatePaymentReceiptPDF(receiptArgs(plan, payment, note))
   }
 
   function emailBill(plan: TuitionPlan, planPayments: TuitionPayment[]) {
     if (!student) return
+    const note = prompt('Add a note to this statement? (optional)') || undefined
     const bal = planBalances(plan, planPayments)
     const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
     setEmailModal({
       defaultRecipients: [student.father_email, student.mother_email].filter((e): e is string => !!e),
       defaultSubject: `Tuition Statement — ${name} (${plan.academic_year})`,
       defaultBody: `Hi,\n\nPlease find attached the tuition statement for ${name} — ${plan.academic_year}.\n\nBalance due: ${bal.totalBalance > 0 ? formatCurrency(bal.totalBalance) : 'Paid in full'}.\n\nThank you.`,
-      buildAttachment: () => getTuitionBillPdfBase64(billArgs(plan, planPayments)),
+      buildAttachment: () => getTuitionBillPdfBase64(billArgs(plan, planPayments, note)),
     })
   }
 
   function emailReceipt(plan: TuitionPlan, payment: TuitionPayment) {
     if (!student) return
+    const note = prompt('Add a note to this receipt? (optional)') || undefined
     const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
     const typeLabel = payment.payment_type === 'donation' ? 'Donation' : payment.payment_type === 'building_fund' ? 'Building Fund' : 'Payment'
     setEmailModal({
       defaultRecipients: [student.father_email, student.mother_email].filter((e): e is string => !!e),
       defaultSubject: `${typeLabel} Receipt — ${name}`,
       defaultBody: `Hi,\n\nPlease find attached your receipt for the ${typeLabel.toLowerCase()} of ${formatCurrency(Number(payment.amount))}.\n\nThank you.`,
-      buildAttachment: () => getPaymentReceiptPdfBase64(receiptArgs(plan, payment)),
+      buildAttachment: () => getPaymentReceiptPdfBase64(receiptArgs(plan, payment, note)),
     })
   }
 

@@ -20,6 +20,7 @@ export type ReceiptDonation = {
 type DonationReceiptOpts = {
   donor: ReceiptDonor
   donation: ReceiptDonation
+  extraNote?: string
 }
 
 // Raw base64 (no "data:application/pdf;...;base64," prefix) suitable for email attachments.
@@ -76,6 +77,16 @@ async function buildDonationReceiptDoc(opts: DonationReceiptOpts): Promise<{ doc
 
   doc.setFont('helvetica', 'normal')
   doc.text('Thank you for your generous support.', 14, y + 16)
+
+  if (opts.extraNote) {
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'italic')
+    doc.setTextColor(80)
+    const wrapWidth = doc.internal.pageSize.getWidth() - 28
+    doc.text(doc.splitTextToSize(`Note: ${opts.extraNote}`, wrapWidth), 14, y + 28)
+    doc.setTextColor(0)
+    doc.setFont('helvetica', 'normal')
+  }
 
   drawLetterheadFooter(doc)
 

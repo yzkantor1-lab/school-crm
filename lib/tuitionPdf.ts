@@ -38,6 +38,7 @@ type BillOpts = {
   payments: BillPayment[]
   semesterRows?: SemesterRow[]
   paymentMethodLabel: (v: string | null) => string
+  extraNote?: string
 }
 
 type ReceiptOpts = {
@@ -46,6 +47,7 @@ type ReceiptOpts = {
   payment: BillPayment
   balanceAfter: number
   paymentMethodLabel: (v: string | null) => string
+  extraNote?: string
 }
 
 function studentName(s: BillStudent) {
@@ -54,6 +56,20 @@ function studentName(s: BillStudent) {
 
 function paymentTypeLabel(t: string | null | undefined) {
   return t === 'building_fund' ? 'Building Fund' : t === 'donation' ? 'Donation' : 'Tuition'
+}
+
+// Draws an ad-hoc note (added at print/email time, not stored on the record)
+// just above the letterhead footer. Returns the new y-coordinate.
+function drawExtraNote(doc: any, note: string, y: number): number {
+  doc.setFontSize(9)
+  doc.setFont('helvetica', 'italic')
+  doc.setTextColor(80)
+  const wrapWidth = doc.internal.pageSize.getWidth() - 28
+  const lines = doc.splitTextToSize(`Note: ${note}`, wrapWidth)
+  doc.text(lines, 14, y)
+  doc.setTextColor(0)
+  doc.setFont('helvetica', 'normal')
+  return y + lines.length * 5
 }
 
 // Raw base64 (no "data:application/pdf;...;base64," prefix) suitable for email attachments.
@@ -212,7 +228,10 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
       alternateRowStyles: { fillColor: [248, 250, 252] },
       margin: { left: 14, right: 14 },
     })
+    y = (doc as any).lastAutoTable.finalY + 8
   }
+
+  if (opts.extraNote) drawExtraNote(doc, opts.extraNote, y + 2)
 
   drawLetterheadFooter(doc)
 
@@ -284,6 +303,8 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
   doc.setTextColor(120)
   doc.text(isDonation ? 'Thank you for your generous donation.' : 'Thank you for your payment.', 14, y + 4)
   doc.setTextColor(0)
+
+  if (opts.extraNote) drawExtraNote(doc, opts.extraNote, y + 14)
 
   drawLetterheadFooter(doc)
 

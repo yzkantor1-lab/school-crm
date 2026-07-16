@@ -116,7 +116,7 @@ export default function DonorDetailPage() {
     fetchData()
   }
 
-  function receiptOpts(donation: Donation) {
+  function receiptOpts(donation: Donation, extraNote?: string) {
     return {
       donor: { name: donor!.name, email: donor!.email, address: donor!.address },
       donation: {
@@ -126,21 +126,24 @@ export default function DonorDetailPage() {
         purpose: donation.purpose,
         notes: donation.notes,
       },
+      extraNote,
     }
   }
 
   function printReceipt(donation: Donation) {
     if (!donor) return
-    generateDonationReceiptPDF(receiptOpts(donation))
+    const note = prompt('Add a note to this receipt? (optional)') || undefined
+    generateDonationReceiptPDF(receiptOpts(donation, note))
   }
 
   function emailReceipt(donation: Donation) {
     if (!donor) return
+    const note = prompt('Add a note to this receipt? (optional)') || undefined
     setEmailModal({
       defaultRecipients: donor.email ? [donor.email] : [],
       defaultSubject: `Donation Receipt — ${donor.name}`,
       defaultBody: `Hi,\n\nPlease find attached your receipt for your generous donation of ${formatCurrency(Number(donation.amount))} on ${new Date(donation.donation_date + 'T00:00:00').toLocaleDateString()}.\n\nThank you for your support.`,
-      buildAttachment: () => getDonationReceiptPdfBase64(receiptOpts(donation)),
+      buildAttachment: () => getDonationReceiptPdfBase64(receiptOpts(donation, note)),
     })
   }
 
