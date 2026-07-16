@@ -6,7 +6,8 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import {
   ArrowLeft, GraduationCap, Plus, X, DollarSign, CheckCircle,
-  Clock, AlertCircle, Edit2, Trash2, Bell, BellOff, CalendarRange, Printer, Receipt, Mail
+  Clock, AlertCircle, Edit2, Trash2, Bell, BellOff, CalendarRange, Printer, Receipt, Mail,
+  Phone, MapPin
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
 import { SCHOOL_YEAR_SEMESTERS } from '@/lib/semesters'
@@ -25,7 +26,13 @@ type Student = {
   status: string
   came_semester: string | null
   semester_left: string | null
+  address: string | null
+  home_phone: string | null
+  father_name: string | null
+  father_cell: string | null
   father_email: string | null
+  mother_name: string | null
+  mother_cell: string | null
   mother_email: string | null
   parents_title: string | null
 }
@@ -481,7 +488,7 @@ export default function StudentTuitionPage() {
 
   const load = useCallback(async () => {
     const [{ data: s }, { data: p }, { data: pay }] = await Promise.all([
-      supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,father_email,mother_email,parents_title').eq('id', studentId).single(),
+      supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title').eq('id', studentId).single(),
       supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
       supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
     ])
@@ -810,6 +817,62 @@ export default function StudentTuitionPage() {
           Add Plan
         </button>
       </div>
+
+      {/* Contact info — so there's no need to jump to the student file while working on tuition */}
+      {(student.address || student.home_phone || student.father_name || student.father_cell || student.father_email
+        || student.mother_name || student.mother_cell || student.mother_email) && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 grid sm:grid-cols-2 gap-4">
+          {(student.address || student.home_phone) && (
+            <div className="space-y-1">
+              {student.parents_title && <p className="text-xs font-medium text-slate-400">{student.parents_title}</p>}
+              {student.address && (
+                <p className="flex items-start gap-1.5 text-sm text-slate-700">
+                  <MapPin size={14} className="text-slate-400 mt-0.5 shrink-0" /> {student.address}
+                </p>
+              )}
+              {student.home_phone && (
+                <p className="flex items-center gap-1.5 text-sm text-slate-700">
+                  <Phone size={14} className="text-slate-400 shrink-0" /> {student.home_phone}
+                </p>
+              )}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-4">
+            {(student.father_name || student.father_cell || student.father_email) && (
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-slate-400">Father</p>
+                {student.father_name && <p className="text-sm font-medium text-slate-900">{student.father_name}</p>}
+                {student.father_cell && (
+                  <p className="flex items-center gap-1.5 text-xs text-slate-600">
+                    <Phone size={12} className="text-slate-400 shrink-0" /> {student.father_cell}
+                  </p>
+                )}
+                {student.father_email && (
+                  <p className="flex items-center gap-1.5 text-xs text-slate-600 truncate">
+                    <Mail size={12} className="text-slate-400 shrink-0" /> {student.father_email}
+                  </p>
+                )}
+              </div>
+            )}
+            {(student.mother_name || student.mother_cell || student.mother_email) && (
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-slate-400">Mother</p>
+                {student.mother_name && <p className="text-sm font-medium text-slate-900">{student.mother_name}</p>}
+                {student.mother_cell && (
+                  <p className="flex items-center gap-1.5 text-xs text-slate-600">
+                    <Phone size={12} className="text-slate-400 shrink-0" /> {student.mother_cell}
+                  </p>
+                )}
+                {student.mother_email && (
+                  <p className="flex items-center gap-1.5 text-xs text-slate-600 truncate">
+                    <Mail size={12} className="text-slate-400 shrink-0" /> {student.mother_email}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Active reminders alert */}
       {plans.some(p => ['overdue','today','soon'].includes(reminderStatus(p.reminder_date))) && (
