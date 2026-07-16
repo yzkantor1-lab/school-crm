@@ -58,7 +58,7 @@ type TuitionPayment = {
   student_id: string
   amount: number
   payment_date: string | null
-  due_date: string
+  due_date: string | null
   status: string
   payment_method: string | null
   payment_type: string | null
@@ -289,7 +289,9 @@ function YearlyOverview({
     const start = new Date(sem.startDate + 'T00:00:00').getTime()
     const end   = new Date(sem.endDate   + 'T23:59:59').getTime()
     return payments.filter(p => {
-      const d = new Date((p.payment_date || p.due_date) + 'T00:00:00').getTime()
+      const dateStr = p.payment_date || p.due_date
+      if (!dateStr) return false
+      const d = new Date(dateStr + 'T00:00:00').getTime()
       return d >= start && d <= end
     })
   }
@@ -652,7 +654,7 @@ export default function StudentTuitionPage() {
     setEditingPayment(payment)
     setPaymentForm({
       amount: String(payment.amount),
-      due_date: payment.due_date,
+      due_date: payment.due_date || '',
       payment_date: payment.payment_date || '',
       status: payment.status,
       payment_method: payment.payment_method || '',
@@ -1401,7 +1403,9 @@ export default function StudentTuitionPage() {
                             <tbody className="divide-y divide-slate-50">
                               {planPayments.map(pay => (
                                 <tr key={pay.id} className="hover:bg-slate-50">
-                                  <td className="py-2 text-slate-600">{new Date(pay.due_date).toLocaleDateString()}</td>
+                                  <td className="py-2 text-slate-600">
+                                    {pay.due_date ? new Date(pay.due_date).toLocaleDateString() : <span className="text-slate-300">—</span>}
+                                  </td>
                                   <td className="py-2 text-slate-600">
                                     {pay.payment_date ? new Date(pay.payment_date).toLocaleDateString() : <span className="text-slate-300">—</span>}
                                   </td>

@@ -19,7 +19,7 @@ export type BillPlan = {
 
 export type BillPayment = {
   amount: number
-  due_date: string
+  due_date: string | null
   payment_date: string | null
   status: string
   payment_method: string | null
@@ -162,7 +162,7 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
       startY: y,
       head: [['Due Date', 'Paid Date', 'Amount', 'For', 'Status', 'Method']],
       body: billablePayments.map(p => [
-        new Date(p.due_date + 'T00:00:00').toLocaleDateString(),
+        p.due_date ? new Date(p.due_date + 'T00:00:00').toLocaleDateString() : '—',
         p.payment_date ? new Date(p.payment_date + 'T00:00:00').toLocaleDateString() : '—',
         `$${Number(p.amount).toFixed(2)}`,
         paymentTypeLabel(p.payment_type),
@@ -248,7 +248,7 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
 
   drawLetterheadFooter(doc)
 
-  const dateForFilename = opts.payment.payment_date || opts.payment.due_date
+  const dateForFilename = opts.payment.payment_date || opts.payment.due_date || 'undated'
   const filename = `${isDonation ? 'donation' : 'payment'}-receipt-${name.replace(/\s+/g, '-').toLowerCase()}-${dateForFilename}.pdf`
   return { doc, filename }
 }
