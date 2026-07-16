@@ -27,6 +27,7 @@ type Student = {
   semester_left: string | null
   father_email: string | null
   mother_email: string | null
+  parents_title: string | null
 }
 
 type TuitionPlan = {
@@ -480,7 +481,7 @@ export default function StudentTuitionPage() {
 
   const load = useCallback(async () => {
     const [{ data: s }, { data: p }, { data: pay }] = await Promise.all([
-      supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,father_email,mother_email').eq('id', studentId).single(),
+      supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,father_email,mother_email,parents_title').eq('id', studentId).single(),
       supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
       supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
     ])

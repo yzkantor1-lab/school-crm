@@ -7,6 +7,7 @@ export type BillStudent = {
   last_name: string | null
   grade_level: string | null
   student_id: string | null
+  parents_title: string | null
 }
 
 export type BillPlan = {
@@ -80,6 +81,29 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
   const totalBalance = tuitionBalance + buildingFundBalance
 
   let y = drawLetterheadHeader(doc, 'TUITION STATEMENT')
+
+  if (totalBalance > 0) {
+    const title = opts.student.parents_title ? `${opts.student.parents_title} ` : ''
+    const salutation = `Dear ${title}${opts.student.last_name || ''},`
+    const paragraphs = [
+      `You currently have an outstanding balance of $${totalBalance.toFixed(2)} on your tuition account. Please remit your payment as soon as possible.`,
+      'If you have any questions, please call Rabbi Kantor at 732-800-1011, extension 2.',
+      'Thank you.',
+    ]
+
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.text(salutation, 14, y)
+    y += 7
+
+    const wrapWidth = doc.internal.pageSize.getWidth() - 28
+    for (const para of paragraphs) {
+      const lines = doc.splitTextToSize(para, wrapWidth)
+      doc.text(lines, 14, y)
+      y += lines.length * 5 + 4
+    }
+    y += 4
+  }
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
