@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Search, GraduationCap, Plus, ChevronRight, Filter, X, UserPlus, BookOpen, CalendarDays, Users } from 'lucide-react'
+import { Search, GraduationCap, Plus, ChevronRight, Filter, X, UserPlus, BookOpen, CalendarDays, Users, AlertCircle } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
 import ExportButton from '@/components/ExportButton'
 import { SCHOOL_YEAR_SEMESTERS } from '@/lib/semesters'
@@ -50,6 +50,9 @@ type StudentWithTuition = Student & {
   activePlan: TuitionPlan | null
   totalPaid: number
   balance: number
+  // Positive balance sitting on an earlier academic year's plan than the one
+  // being displayed — e.g. this year is paid in full but last year isn't.
+  priorOutstandingAmount: number
   // computed for export
   activePlanYear: string
   activePlanStructure: string
@@ -182,23 +185,36 @@ export default function TuitionPage() {
       return
     }
 
+    const planExpected = (p: TuitionPlan) =>
+      Number(p.total_amount ?? 0) - Number(p.discount_amount ?? 0) + Number(p.building_fund_amount ?? 0)
+    const planPaid = (p: TuitionPlan) =>
+      payments.filter(pay => pay.tuition_plan_id === p.id).reduce((sum, pay) => sum + Number(pay.amount), 0)
+
     const enriched: StudentWithTuition[] = (studentsData || []).map(s => {
       const studentPlans = plans.filter(p => p.student_id === s.id)
-      const activePlan = studentPlans.find(p => p.status === 'active') || studentPlans[0] || null
-      const planIds = studentPlans.map(p => p.id)
-      const totalPaid = payments
-        .filter(p => planIds.includes(p.tuition_plan_id))
-        .reduce((sum, p) => sum + Number(p.amount), 0)
-      const expected = activePlan
-        ? Number(activePlan.total_amount ?? 0) - Number(activePlan.discount_amount ?? 0) + Number(activePlan.building_fund_amount ?? 0)
-        : 0
+      // Latest academic year first; an 'active' status only breaks a tie
+      // between plans from the same year — a stale 'active' flag on an old
+      // plan should never override a newer year's plan.
+      const sortedPlans = [...studentPlans].sort((a, b) => {
+        const yearCmp = (b.academic_year || '').localeCompare(a.academic_year || '')
+        if (yearCmp !== 0) return yearCmp
+        return (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1)
+      })
+      const activePlan = sortedPlans[0] || null
+
+      const totalPaid = activePlan ? planPaid(activePlan) : 0
+      const expected = activePlan ? planExpected(activePlan) : 0
       const balance = expected - totalPaid
+
+      const priorOutstandingAmount = sortedPlans.slice(1)
+        .reduce((sum, p) => sum + Math.max(0, planExpected(p) - planPaid(p)), 0)
 
       return {
         ...s,
         activePlan,
         totalPaid,
         balance,
+        priorOutstandingAmount,
         activePlanYear: activePlan?.academic_year ?? '',
         activePlanStructure: activePlan?.payment_structure ?? '',
         expected,
@@ -640,8 +656,15 @@ function TuitionTable({ students }: { students: StudentWithTuition[] }) {
               </td>
               <td className="px-5 py-3.5 text-right">
                 {s.expected > 0 ? (
-                  <span className={`text-sm font-medium ${s.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {s.balance > 0 ? formatCurrency(s.balance) : 'Paid in Full'}
+                  <span className="inline-flex items-center justify-end gap-1.5">
+                    <span className={`text-sm font-medium ${s.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {s.balance > 0 ? formatCurrency(s.balance) : 'Paid in Full'}
+                    </span>
+                    {s.priorOutstandingAmount > 0 && (
+                      <span title={`Outstanding balance from a previous year: ${formatCurrency(s.priorOutstandingAmount)}`}>
+                        <AlertCircle size={14} className="text-red-500 shrink-0" />
+                      </span>
+                    )}
                   </span>
                 ) : (
                   <span className="text-slate-300 text-sm">—</span>
