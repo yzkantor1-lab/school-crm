@@ -110,6 +110,7 @@ export default function TuitionPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'has_plan' | 'no_plan'>('all')
+  const [showOutstandingOnly, setShowOutstandingOnly] = useState(false)
   const [enrollmentFilter, setEnrollmentFilter] = useState<StatusFilter>('current')
   const [tab, setTab] = useState<Tab>('all')
 
@@ -277,8 +278,9 @@ export default function TuitionPage() {
     const matchesEnrollment =
       enrollmentFilter === 'all' ||
       (enrollmentFilter === 'graduated' ? s.status === 'graduated' : s.status !== 'graduated')
-    return matchesSearch && matchesFilter && matchesEnrollment
-  }), [students, search, filterStatus, enrollmentFilter])
+    const matchesOutstanding = !showOutstandingOnly || s.balance > 0 || s.priorOutstandingAmount > 0
+    return matchesSearch && matchesFilter && matchesEnrollment && matchesOutstanding
+  }), [students, search, filterStatus, enrollmentFilter, showOutstandingOnly])
 
   // Group by academic year
   const byYear = useMemo(() => {
@@ -479,12 +481,22 @@ export default function TuitionPage() {
           <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Total Collected</p>
           <p className="text-2xl font-bold text-green-600 mt-1">{formatCurrency(totalCollected)}</p>
         </div>
-        <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
-          <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Outstanding</p>
+        <button
+          type="button"
+          onClick={() => setShowOutstandingOnly(v => !v)}
+          title="Click to show only students with an outstanding balance"
+          className={`text-left bg-white rounded-xl border shadow-sm p-4 transition-colors ${
+            showOutstandingOnly ? 'border-red-300 ring-2 ring-red-100' : 'border-slate-100 hover:border-red-200'
+          }`}
+        >
+          <p className="text-xs text-slate-500 font-medium uppercase tracking-wide flex items-center justify-between">
+            Outstanding
+            {showOutstandingOnly && <span className="text-red-500 normal-case font-normal">Filtering ✕</span>}
+          </p>
           <p className={`text-2xl font-bold mt-1 ${totalOutstanding > 0 ? 'text-red-600' : 'text-slate-900'}`}>
             {formatCurrency(Math.max(0, totalOutstanding))}
           </p>
-        </div>
+        </button>
       </div>
 
       {/* Search + Filter + Export + Tabs */}
