@@ -9,25 +9,100 @@ import { formatCurrency } from '@/lib/currency'
 import ExportButton from '@/components/ExportButton'
 import { SCHOOL_YEAR_SEMESTERS } from '@/lib/semesters'
 
-// Which of the three school-year semesters a due date falls in — mirrors the
-// date ranges used for prorated billing on the per-student tuition page.
-function semesterBucketForDate(dateStr: string | null): { key: string; label: string; sortKey: number } {
-  if (!dateStr) return { key: 'none', label: 'No Due Date', sortKey: -1 }
-  for (let gi = 0; gi < SCHOOL_YEAR_SEMESTERS.length; gi++) {
-    const yearGroup = SCHOOL_YEAR_SEMESTERS[gi]
-    for (let si = 0; si < yearGroup.semesters.length; si++) {
-      const sem = yearGroup.semesters[si]
-      if (dateStr >= sem.startDate && dateStr <= sem.endDate) {
-        return { key: `${yearGroup.year}-s${si}`, label: `${yearGroup.year} · Semester ${si + 1}`, sortKey: gi * 10 + si }
-      }
-    }
-  }
-  return { key: 'outside', label: 'Outside Defined Semesters', sortKey: 9999 }
+// There's no per-installment schedule in the data — payments are only ever
+// logged once received, never as a pending/due row — so "outstanding by
+// semester/month" is an estimate: each plan's total is spread evenly across
+// the calendar days of its date range (weighted by how much of each bucket
+// the plan actually overlaps), then payments are applied oldest-bucket-first
+// so a bucket only shows as owed once earlier buckets are covered.
+function daysInclusive(start: string, end: string): number {
+  return Math.round((new Date(end + 'T00:00:00').getTime() - new Date(start + 'T00:00:00').getTime()) / 86400000) + 1
 }
 
-function monthBucketForDate(dateStr: string | null): { key: string; label: string } {
-  if (!dateStr) return { key: '9999-99', label: 'No Due Date' }
-  return { key: dateStr.slice(0, 7), label: new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) }
+function overlapDays(aStart: string, aEnd: string, bStart: string, bEnd: string): number {
+  const start = aStart > bStart ? aStart : bStart
+  const end = aEnd < bEnd ? aEnd : bEnd
+  return start > end ? 0 : daysInclusive(start, end)
+}
+
+function planDateRange(plan: TuitionPlan): { start: string; end: string } | null {
+  if (plan.start_date && plan.end_date) return { start: plan.start_date, end: plan.end_date }
+  const yearGroup = SCHOOL_YEAR_SEMESTERS.find(g => g.year === plan.academic_year)
+  return yearGroup ? { start: yearGroup.semesters[0].startDate, end: yearGroup.semesters[2].endDate } : null
+}
+
+type PlanBucket = { key: string; label: string; sortKey: number; startDate: string; amount: number }
+
+function semesterBucketsForPlan(plan: TuitionPlan, expected: number): PlanBucket[] {
+  const range = planDateRange(plan)
+  if (!range || expected <= 0) return []
+  const totalDays = daysInclusive(range.start, range.end)
+  if (totalDays <= 0) return []
+  const buckets: PlanBucket[] = []
+  SCHOOL_YEAR_SEMESTERS.forEach((yearGroup, gi) => {
+    yearGroup.semesters.forEach((sem, si) => {
+      const overlap = overlapDays(range.start, range.end, sem.startDate, sem.endDate)
+      if (overlap > 0) {
+        buckets.push({
+          key: `${yearGroup.year}-s${si}`,
+          label: `${yearGroup.year} · Semester ${si + 1}`,
+          sortKey: gi * 10 + si,
+          startDate: sem.startDate,
+          amount: expected * (overlap / totalDays),
+        })
+      }
+    })
+  })
+  return buckets.sort((a, b) => a.sortKey - b.sortKey)
+}
+
+function monthBucketsForPlan(plan: TuitionPlan, expected: number): PlanBucket[] {
+  const range = planDateRange(plan)
+  if (!range || expected <= 0) return []
+  const totalDays = daysInclusive(range.start, range.end)
+  if (totalDays <= 0) return []
+  const buckets: PlanBucket[] = []
+  const cursor = new Date(range.start + 'T00:00:00')
+  cursor.setDate(1)
+  const endDate = new Date(range.end + 'T00:00:00')
+  while (cursor <= endDate) {
+    const y = cursor.getFullYear()
+    const m = cursor.getMonth()
+    const monthStart = `${y}-${String(m + 1).padStart(2, '0')}-01`
+    const monthEnd = new Date(y, m + 1, 0).toISOString().slice(0, 10)
+    const overlap = overlapDays(range.start, range.end, monthStart, monthEnd)
+    if (overlap > 0) {
+      buckets.push({
+        key: `${y}-${String(m + 1).padStart(2, '0')}`,
+        label: cursor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+        sortKey: y * 12 + m, // globally comparable across plans/years, unlike a local per-plan counter
+        startDate: monthStart,
+        amount: expected * (overlap / totalDays),
+      })
+    }
+    cursor.setMonth(m + 1)
+  }
+  return buckets
+}
+
+// Applies `paid` to buckets oldest-first, leaving each bucket's unpaid remainder.
+function applyPaidWaterfall(buckets: PlanBucket[], paid: number): PlanBucket[] {
+  let remainingPaid = paid
+  return buckets.map(b => {
+    const applied = Math.min(remainingPaid, b.amount)
+    remainingPaid -= applied
+    return { ...b, amount: b.amount - applied }
+  })
+}
+
+function groupOutstanding(rows: OutstandingRow[], studentIds: Set<string>) {
+  const map = new Map<string, { label: string; sortKey: number; rows: OutstandingRow[] }>()
+  for (const row of rows) {
+    if (!studentIds.has(row.studentId)) continue
+    if (!map.has(row.bucketLabel)) map.set(row.bucketLabel, { label: row.bucketLabel, sortKey: row.bucketSortKey, rows: [] })
+    map.get(row.bucketLabel)!.rows.push(row)
+  }
+  return [...map.values()].sort((a, b) => a.sortKey - b.sortKey)
 }
 
 const TUITION_EXPORT_COLS = [
@@ -89,19 +164,18 @@ type TuitionPayment = {
   amount: number
   status: string
   payment_type: string | null
-  due_date: string | null
 }
 
-// An individual unpaid installment, enriched for the "outstanding by
-// semester/month" breakdown views.
+// One estimated unpaid bucket (a semester or a month) for one plan, for the
+// "outstanding by semester/month" breakdown views.
 type OutstandingRow = {
-  paymentId: string
+  id: string
   studentId: string
   studentName: string
   academicYear: string
   amount: number
-  dueDate: string | null
-  status: string
+  bucketLabel: string
+  bucketSortKey: number
 }
 
 function toExportRow(s: StudentWithTuition) {
@@ -147,7 +221,8 @@ export default function TuitionPage() {
   const supabase = createClient()
   const router = useRouter()
   const [students, setStudents] = useState<StudentWithTuition[]>([])
-  const [outstandingPayments, setOutstandingPayments] = useState<OutstandingRow[]>([])
+  const [outstandingSemesterRows, setOutstandingSemesterRows] = useState<OutstandingRow[]>([])
+  const [outstandingMonthRows, setOutstandingMonthRows] = useState<OutstandingRow[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'has_plan' | 'no_plan'>('all')
@@ -230,7 +305,7 @@ export default function TuitionPage() {
     const planExpected = (p: TuitionPlan) =>
       Number(p.total_amount ?? 0) - Number(p.discount_amount ?? 0) + Number(p.building_fund_amount ?? 0)
     const planPaid = (p: TuitionPlan) =>
-      payments.filter(pay => pay.tuition_plan_id === p.id && pay.status === 'paid').reduce((sum, pay) => sum + Number(pay.amount), 0)
+      payments.filter(pay => pay.tuition_plan_id === p.id).reduce((sum, pay) => sum + Number(pay.amount), 0)
 
     const enriched: StudentWithTuition[] = (studentsData || []).map(s => {
       const studentPlans = plans.filter(p => p.student_id === s.id)
@@ -263,27 +338,44 @@ export default function TuitionPage() {
       }
     })
 
+    // Estimated outstanding-by-period: no pending/due-dated payment rows exist
+    // in this data (payments are only ever logged once received), so each
+    // plan's total is prorated across its date range into semester/month
+    // buckets, then what's been paid is applied oldest-bucket-first — a bucket
+    // only counts as outstanding once it has started and still has a balance.
     const studentById = new Map((studentsData || []).map(s => [s.id, s]))
-    const planById = new Map(plans.map(p => [p.id, p]))
-    const outstanding: OutstandingRow[] = payments
-      .filter(p => p.status !== 'paid' && p.status !== 'waived')
-      .flatMap(p => {
-        const plan = planById.get(p.tuition_plan_id)
-        const student = plan ? studentById.get(plan.student_id) : undefined
-        if (!plan || !student) return []
-        return [{
-          paymentId: p.id,
-          studentId: student.id,
-          studentName: [student.first_name, student.last_name].filter(Boolean).join(' ') || '—',
-          academicYear: plan.academic_year ?? '—',
-          amount: Number(p.amount),
-          dueDate: p.due_date,
-          status: p.status,
-        }]
-      })
+    const today = new Date().toISOString().slice(0, 10)
+    const outstandingSemester: OutstandingRow[] = []
+    const outstandingMonth: OutstandingRow[] = []
+
+    for (const plan of plans) {
+      const student = studentById.get(plan.student_id)
+      const expected = planExpected(plan)
+      if (!student || expected <= 0) continue
+      const paid = planPaid(plan)
+      const studentName = [student.first_name, student.last_name].filter(Boolean).join(' ') || '—'
+
+      for (const b of applyPaidWaterfall(semesterBucketsForPlan(plan, expected), paid)) {
+        if (b.startDate > today || b.amount <= 0.01) continue
+        outstandingSemester.push({
+          id: `${plan.id}-${b.key}`, studentId: student.id, studentName,
+          academicYear: plan.academic_year ?? '—', amount: b.amount,
+          bucketLabel: b.label, bucketSortKey: b.sortKey,
+        })
+      }
+      for (const b of applyPaidWaterfall(monthBucketsForPlan(plan, expected), paid)) {
+        if (b.startDate > today || b.amount <= 0.01) continue
+        outstandingMonth.push({
+          id: `${plan.id}-${b.key}`, studentId: student.id, studentName,
+          academicYear: plan.academic_year ?? '—', amount: b.amount,
+          bucketLabel: b.label, bucketSortKey: b.sortKey,
+        })
+      }
+    }
 
     setStudents(enriched)
-    setOutstandingPayments(outstanding)
+    setOutstandingSemesterRows(outstandingSemester)
+    setOutstandingMonthRows(outstandingMonth)
     setLoading(false)
   }, [supabase, withRetry, fetchAllPayments])
 
@@ -369,32 +461,18 @@ export default function TuitionPage() {
     return [...map.entries()].sort(([a], [b]) => semesterSort(a) - semesterSort(b))
   }, [filtered])
 
-  // Unpaid installments for students currently in view, bucketed by which
-  // school-year semester or which calendar month they're due in — oldest
+  // Estimated outstanding buckets for students currently in view — oldest
   // (most overdue) first, so the most urgent ones surface at the top.
   const filteredStudentIds = useMemo(() => new Set(filtered.map(s => s.id)), [filtered])
 
-  const byOutstandingSemester = useMemo(() => {
-    const map = new Map<string, { label: string; sortKey: number; rows: OutstandingRow[] }>()
-    for (const row of outstandingPayments) {
-      if (!filteredStudentIds.has(row.studentId)) continue
-      const b = semesterBucketForDate(row.dueDate)
-      if (!map.has(b.key)) map.set(b.key, { label: b.label, sortKey: b.sortKey, rows: [] })
-      map.get(b.key)!.rows.push(row)
-    }
-    return [...map.values()].sort((a, b) => a.sortKey - b.sortKey)
-  }, [outstandingPayments, filteredStudentIds])
-
-  const byOutstandingMonth = useMemo(() => {
-    const map = new Map<string, { label: string; rows: OutstandingRow[] }>()
-    for (const row of outstandingPayments) {
-      if (!filteredStudentIds.has(row.studentId)) continue
-      const b = monthBucketForDate(row.dueDate)
-      if (!map.has(b.key)) map.set(b.key, { label: b.label, rows: [] })
-      map.get(b.key)!.rows.push(row)
-    }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v)
-  }, [outstandingPayments, filteredStudentIds])
+  const byOutstandingSemester = useMemo(
+    () => groupOutstanding(outstandingSemesterRows, filteredStudentIds),
+    [outstandingSemesterRows, filteredStudentIds]
+  )
+  const byOutstandingMonth = useMemo(
+    () => groupOutstanding(outstandingMonthRows, filteredStudentIds),
+    [outstandingMonthRows, filteredStudentIds]
+  )
 
   const totalStudentsWithPlan = students.filter(s => s.activePlan).length
   const totalExpected = students.reduce((sum, s) => sum + s.expected, 0)
@@ -660,6 +738,10 @@ export default function TuitionPage() {
         <TuitionTable students={filtered} />
       ) : tab === 'semester_due' || tab === 'month_due' ? (
         <div className="space-y-5">
+          <p className="text-xs text-slate-400 italic">
+            Estimated — plans aren&apos;t billed with a fixed schedule, so each plan&apos;s total is spread evenly
+            across its date range and payments are applied to the oldest period first.
+          </p>
           {(tab === 'semester_due' ? byOutstandingSemester : byOutstandingMonth).length === 0 && (
             <div className="text-center py-12 text-slate-400 text-sm">Nothing outstanding.</div>
           )}
@@ -825,30 +907,18 @@ function OutstandingPaymentsTable({ rows }: { rows: OutstandingRow[] }) {
           <tr>
             <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Student</th>
             <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide hidden md:table-cell">Academic Year</th>
-            <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Due Date</th>
-            <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
-            <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Amount</th>
+            <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Est. Amount Due</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-50">
           {rows.map(r => (
-            <tr key={r.paymentId} className="hover:bg-slate-50 transition-colors">
+            <tr key={r.id} className="hover:bg-slate-50 transition-colors">
               <td className="px-5 py-3">
                 <Link href={`/admin/tuition/${r.studentId}`} className="text-sm font-medium text-slate-900 hover:text-blue-600 transition-colors">
                   {r.studentName}
                 </Link>
               </td>
               <td className="px-5 py-3 text-sm text-slate-600 hidden md:table-cell">{r.academicYear}</td>
-              <td className="px-5 py-3 text-sm text-slate-600">
-                {r.dueDate ? new Date(r.dueDate + 'T00:00:00').toLocaleDateString() : '—'}
-              </td>
-              <td className="px-5 py-3">
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${
-                  r.status === 'overdue' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'
-                }`}>
-                  {r.status}
-                </span>
-              </td>
               <td className="px-5 py-3 text-right text-sm font-medium text-red-600">{formatCurrency(r.amount)}</td>
             </tr>
           ))}

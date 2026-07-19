@@ -1,23 +1,13 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 
-type TuitionPayment = {
-  id: string
-  tuition_plan_id: string
-  amount: number
-  status: string
-  payment_type: string | null
-  due_date: string | null
-}
+type TuitionPayment = { id: string; tuition_plan_id: string; amount: number; status: string; payment_type: string | null }
 
 // Runs server-side so the browser never talks to Supabase's REST API directly
 // for this endpoint — some ad blockers / privacy extensions block requests
 // whose URL contains "payment", which was silently killing the client-side
 // fetch to /rest/v1/tuition_payments (while sibling requests to /students,
 // /tuition_plans went through fine on the same page).
-//
-// Returns every status (not just paid) — the tuition list needs the unpaid
-// ones too, to break outstanding balances down by due date.
 export async function GET() {
   const supabase = await createClient()
 
@@ -30,7 +20,8 @@ export async function GET() {
   while (true) {
     const { data, error } = await supabase
       .from('tuition_payments')
-      .select('id,tuition_plan_id,amount,status,payment_type,due_date')
+      .select('id,tuition_plan_id,amount,status,payment_type')
+      .eq('status', 'paid')
       .in('payment_type', ['tuition', 'building_fund'])
       .gt('id', cursor)
       .order('id')
