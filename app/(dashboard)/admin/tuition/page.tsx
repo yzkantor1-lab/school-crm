@@ -9,6 +9,27 @@ import { formatCurrency } from '@/lib/currency'
 import ExportButton from '@/components/ExportButton'
 import { SCHOOL_YEAR_SEMESTERS } from '@/lib/semesters'
 
+// Which of the three school-year semesters a due date falls in — mirrors the
+// date ranges used for prorated billing on the per-student tuition page.
+function semesterBucketForDate(dateStr: string | null): { key: string; label: string; sortKey: number } {
+  if (!dateStr) return { key: 'none', label: 'No Due Date', sortKey: -1 }
+  for (let gi = 0; gi < SCHOOL_YEAR_SEMESTERS.length; gi++) {
+    const yearGroup = SCHOOL_YEAR_SEMESTERS[gi]
+    for (let si = 0; si < yearGroup.semesters.length; si++) {
+      const sem = yearGroup.semesters[si]
+      if (dateStr >= sem.startDate && dateStr <= sem.endDate) {
+        return { key: `${yearGroup.year}-s${si}`, label: `${yearGroup.year} · Semester ${si + 1}`, sortKey: gi * 10 + si }
+      }
+    }
+  }
+  return { key: 'outside', label: 'Outside Defined Semesters', sortKey: 9999 }
+}
+
+function monthBucketForDate(dateStr: string | null): { key: string; label: string } {
+  if (!dateStr) return { key: '9999-99', label: 'No Due Date' }
+  return { key: dateStr.slice(0, 7), label: new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) }
+}
+
 const TUITION_EXPORT_COLS = [
   { header: 'First Name',        key: 'first_name' },
   { header: 'Last Name',         key: 'last_name' },
@@ -59,10 +80,29 @@ type StudentWithTuition = Student & {
   expected: number
 }
 
-type Tab = 'all' | 'year' | 'semester'
+type Tab = 'all' | 'year' | 'semester' | 'semester_due' | 'month_due'
 type StatusFilter = 'all' | 'current' | 'graduated'
 
-type TuitionPayment = { id: string; tuition_plan_id: string; amount: number; status: string; payment_type: string | null }
+type TuitionPayment = {
+  id: string
+  tuition_plan_id: string
+  amount: number
+  status: string
+  payment_type: string | null
+  due_date: string | null
+}
+
+// An individual unpaid installment, enriched for the "outstanding by
+// semester/month" breakdown views.
+type OutstandingRow = {
+  paymentId: string
+  studentId: string
+  studentName: string
+  academicYear: string
+  amount: number
+  dueDate: string | null
+  status: string
+}
 
 function toExportRow(s: StudentWithTuition) {
   return {
@@ -107,6 +147,7 @@ export default function TuitionPage() {
   const supabase = createClient()
   const router = useRouter()
   const [students, setStudents] = useState<StudentWithTuition[]>([])
+  const [outstandingPayments, setOutstandingPayments] = useState<OutstandingRow[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'has_plan' | 'no_plan'>('all')
@@ -147,7 +188,7 @@ export default function TuitionPage() {
   // extensions block requests whose URL contains "payment", which was silently
   // killing this one fetch while sibling requests (students, tuition_plans)
   // on the same page went through fine.
-  const fetchAllPaidPayments = useCallback(async () => {
+  const fetchAllPayments = useCallback(async () => {
     return withRetry('payments', async () => {
       const res = await fetch('/api/tuition/payments')
       if (!res.ok) {
@@ -178,7 +219,7 @@ export default function TuitionPage() {
         if (error) throw error
         return data || []
       })
-      payments = await fetchAllPaidPayments()
+      payments = await fetchAllPayments()
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setDebugInfo(`Couldn't load tuition data: ${msg}`)
@@ -189,7 +230,7 @@ export default function TuitionPage() {
     const planExpected = (p: TuitionPlan) =>
       Number(p.total_amount ?? 0) - Number(p.discount_amount ?? 0) + Number(p.building_fund_amount ?? 0)
     const planPaid = (p: TuitionPlan) =>
-      payments.filter(pay => pay.tuition_plan_id === p.id).reduce((sum, pay) => sum + Number(pay.amount), 0)
+      payments.filter(pay => pay.tuition_plan_id === p.id && pay.status === 'paid').reduce((sum, pay) => sum + Number(pay.amount), 0)
 
     const enriched: StudentWithTuition[] = (studentsData || []).map(s => {
       const studentPlans = plans.filter(p => p.student_id === s.id)
@@ -222,9 +263,29 @@ export default function TuitionPage() {
       }
     })
 
+    const studentById = new Map((studentsData || []).map(s => [s.id, s]))
+    const planById = new Map(plans.map(p => [p.id, p]))
+    const outstanding: OutstandingRow[] = payments
+      .filter(p => p.status !== 'paid' && p.status !== 'waived')
+      .flatMap(p => {
+        const plan = planById.get(p.tuition_plan_id)
+        const student = plan ? studentById.get(plan.student_id) : undefined
+        if (!plan || !student) return []
+        return [{
+          paymentId: p.id,
+          studentId: student.id,
+          studentName: [student.first_name, student.last_name].filter(Boolean).join(' ') || '—',
+          academicYear: plan.academic_year ?? '—',
+          amount: Number(p.amount),
+          dueDate: p.due_date,
+          status: p.status,
+        }]
+      })
+
     setStudents(enriched)
+    setOutstandingPayments(outstanding)
     setLoading(false)
-  }, [supabase, withRetry, fetchAllPaidPayments])
+  }, [supabase, withRetry, fetchAllPayments])
 
   /* eslint-disable react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await */
   useEffect(() => {
@@ -308,6 +369,33 @@ export default function TuitionPage() {
     return [...map.entries()].sort(([a], [b]) => semesterSort(a) - semesterSort(b))
   }, [filtered])
 
+  // Unpaid installments for students currently in view, bucketed by which
+  // school-year semester or which calendar month they're due in — oldest
+  // (most overdue) first, so the most urgent ones surface at the top.
+  const filteredStudentIds = useMemo(() => new Set(filtered.map(s => s.id)), [filtered])
+
+  const byOutstandingSemester = useMemo(() => {
+    const map = new Map<string, { label: string; sortKey: number; rows: OutstandingRow[] }>()
+    for (const row of outstandingPayments) {
+      if (!filteredStudentIds.has(row.studentId)) continue
+      const b = semesterBucketForDate(row.dueDate)
+      if (!map.has(b.key)) map.set(b.key, { label: b.label, sortKey: b.sortKey, rows: [] })
+      map.get(b.key)!.rows.push(row)
+    }
+    return [...map.values()].sort((a, b) => a.sortKey - b.sortKey)
+  }, [outstandingPayments, filteredStudentIds])
+
+  const byOutstandingMonth = useMemo(() => {
+    const map = new Map<string, { label: string; rows: OutstandingRow[] }>()
+    for (const row of outstandingPayments) {
+      if (!filteredStudentIds.has(row.studentId)) continue
+      const b = monthBucketForDate(row.dueDate)
+      if (!map.has(b.key)) map.set(b.key, { label: b.label, rows: [] })
+      map.get(b.key)!.rows.push(row)
+    }
+    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v)
+  }, [outstandingPayments, filteredStudentIds])
+
   const totalStudentsWithPlan = students.filter(s => s.activePlan).length
   const totalExpected = students.reduce((sum, s) => sum + s.expected, 0)
   const totalCollected = students.reduce((sum, s) => sum + s.totalPaid, 0)
@@ -317,6 +405,10 @@ export default function TuitionPage() {
     { id: 'all' as Tab,      label: 'All Students',    icon: <Users size={14} /> },
     { id: 'year' as Tab,     label: 'By Academic Year', icon: <BookOpen size={14} /> },
     { id: 'semester' as Tab, label: 'By Semester',      icon: <CalendarDays size={14} /> },
+    ...(showOutstandingOnly ? [
+      { id: 'semester_due' as Tab, label: 'By Semester Due', icon: <CalendarDays size={14} /> },
+      { id: 'month_due' as Tab,    label: 'By Month Due',    icon: <CalendarDays size={14} /> },
+    ] : []),
   ]
 
   const ENROLLMENT_FILTERS = [
@@ -483,7 +575,11 @@ export default function TuitionPage() {
         </div>
         <button
           type="button"
-          onClick={() => setShowOutstandingOnly(v => !v)}
+          onClick={() => setShowOutstandingOnly(v => {
+            const next = !v
+            if (!next && (tab === 'semester_due' || tab === 'month_due')) setTab('all')
+            return next
+          })}
           title="Click to show only students with an outstanding balance"
           className={`text-left bg-white rounded-xl border shadow-sm p-4 transition-colors ${
             showOutstandingOnly ? 'border-red-300 ring-2 ring-red-100' : 'border-slate-100 hover:border-red-200'
@@ -562,6 +658,29 @@ export default function TuitionPage() {
         <div className="text-center py-12 text-slate-400 text-sm">Loading…</div>
       ) : tab === 'all' ? (
         <TuitionTable students={filtered} />
+      ) : tab === 'semester_due' || tab === 'month_due' ? (
+        <div className="space-y-5">
+          {(tab === 'semester_due' ? byOutstandingSemester : byOutstandingMonth).length === 0 && (
+            <div className="text-center py-12 text-slate-400 text-sm">Nothing outstanding.</div>
+          )}
+          {(tab === 'semester_due' ? byOutstandingSemester : byOutstandingMonth).map(group => (
+            <div key={group.label} className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+              <div className="px-5 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <CalendarDays size={15} className="text-red-400" />
+                  <span className="font-semibold text-slate-800 text-sm">{group.label}</span>
+                </div>
+                <div className="text-xs text-slate-500">
+                  {group.rows.length} payment{group.rows.length !== 1 ? 's' : ''} ·{' '}
+                  <span className="text-red-600 font-medium">
+                    {formatCurrency(group.rows.reduce((sum, r) => sum + r.amount, 0))}
+                  </span>
+                </div>
+              </div>
+              <OutstandingPaymentsTable rows={group.rows} />
+            </div>
+          ))}
+        </div>
       ) : (
         <div className="space-y-5">
           {(tab === 'year' ? byYear : bySemester).length === 0 && (
@@ -693,6 +812,50 @@ function TuitionTable({ students }: { students: StudentWithTuition[] }) {
       </table>
       {students.length === 0 && (
         <div className="text-center py-12 text-slate-400 text-sm">No students found.</div>
+      )}
+    </div>
+  )
+}
+
+function OutstandingPaymentsTable({ rows }: { rows: OutstandingRow[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead className="bg-slate-50 border-b border-slate-100">
+          <tr>
+            <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Student</th>
+            <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide hidden md:table-cell">Academic Year</th>
+            <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Due Date</th>
+            <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
+            <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Amount</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-50">
+          {rows.map(r => (
+            <tr key={r.paymentId} className="hover:bg-slate-50 transition-colors">
+              <td className="px-5 py-3">
+                <Link href={`/admin/tuition/${r.studentId}`} className="text-sm font-medium text-slate-900 hover:text-blue-600 transition-colors">
+                  {r.studentName}
+                </Link>
+              </td>
+              <td className="px-5 py-3 text-sm text-slate-600 hidden md:table-cell">{r.academicYear}</td>
+              <td className="px-5 py-3 text-sm text-slate-600">
+                {r.dueDate ? new Date(r.dueDate + 'T00:00:00').toLocaleDateString() : '—'}
+              </td>
+              <td className="px-5 py-3">
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${
+                  r.status === 'overdue' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'
+                }`}>
+                  {r.status}
+                </span>
+              </td>
+              <td className="px-5 py-3 text-right text-sm font-medium text-red-600">{formatCurrency(r.amount)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length === 0 && (
+        <div className="text-center py-12 text-slate-400 text-sm">Nothing outstanding.</div>
       )}
     </div>
   )
