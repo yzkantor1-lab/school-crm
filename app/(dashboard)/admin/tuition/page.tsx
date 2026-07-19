@@ -31,7 +31,7 @@ function planDateRange(plan: TuitionPlan): { start: string; end: string } | null
   return yearGroup ? { start: yearGroup.semesters[0].startDate, end: yearGroup.semesters[2].endDate } : null
 }
 
-type PlanBucket = { key: string; label: string; sortKey: number; startDate: string; amount: number }
+type PlanBucket = { key: string; label: string; sortKey: number; startDate: string; endDate: string; amount: number }
 
 function semesterBucketsForPlan(plan: TuitionPlan, expected: number): PlanBucket[] {
   const range = planDateRange(plan)
@@ -48,6 +48,7 @@ function semesterBucketsForPlan(plan: TuitionPlan, expected: number): PlanBucket
           label: `${yearGroup.year} · Semester ${si + 1}`,
           sortKey: gi * 10 + si,
           startDate: sem.startDate,
+          endDate: sem.endDate,
           amount: expected * (overlap / totalDays),
         })
       }
@@ -77,6 +78,7 @@ function monthBucketsForPlan(plan: TuitionPlan, expected: number): PlanBucket[] 
         label: cursor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
         sortKey: y * 12 + m, // globally comparable across plans/years, unlike a local per-plan counter
         startDate: monthStart,
+        endDate: monthEnd,
         amount: expected * (overlap / totalDays),
       })
     }
@@ -164,16 +166,19 @@ type TuitionPayment = {
   amount: number
   status: string
   payment_type: string | null
+  payment_date: string | null
 }
 
-// One estimated unpaid bucket (a semester or a month) for one plan, for the
-// "outstanding by semester/month" breakdown views.
+// One bucket (a semester or a month) for one plan, for the "outstanding by
+// semester/month" report views. `received` is real money actually paid
+// during that period; `outstanding` is the estimated remainder still owed.
 type OutstandingRow = {
   id: string
   studentId: string
   studentName: string
   academicYear: string
-  amount: number
+  received: number
+  outstanding: number
   bucketLabel: string
   bucketSortKey: number
 }
@@ -343,6 +348,9 @@ export default function TuitionPage() {
     // plan's total is prorated across its date range into semester/month
     // buckets, then what's been paid is applied oldest-bucket-first — a bucket
     // only counts as outstanding once it has started and still has a balance.
+    // Report is scoped to currently-enrolled students only (status active),
+    // regardless of whatever enrollment filter is selected elsewhere on the
+    // page — a graduated/withdrawn student's old balance doesn't belong here.
     const studentById = new Map((studentsData || []).map(s => [s.id, s]))
     const today = new Date().toISOString().slice(0, 10)
     const outstandingSemester: OutstandingRow[] = []
@@ -351,23 +359,32 @@ export default function TuitionPage() {
     for (const plan of plans) {
       const student = studentById.get(plan.student_id)
       const expected = planExpected(plan)
-      if (!student || expected <= 0) continue
+      if (!student || student.status !== 'active' || expected <= 0) continue
       const paid = planPaid(plan)
       const studentName = [student.first_name, student.last_name].filter(Boolean).join(' ') || '—'
+      const planPayments = payments.filter(pay => pay.tuition_plan_id === plan.id)
+      const receivedInRange = (start: string, end: string) =>
+        planPayments
+          .filter(pay => pay.payment_date && pay.payment_date >= start && pay.payment_date <= end)
+          .reduce((sum, pay) => sum + Number(pay.amount), 0)
 
       for (const b of applyPaidWaterfall(semesterBucketsForPlan(plan, expected), paid)) {
-        if (b.startDate > today || b.amount <= 0.01) continue
+        if (b.startDate > today) continue
+        const received = receivedInRange(b.startDate, b.endDate)
+        if (b.amount <= 0.01 && received <= 0.01) continue
         outstandingSemester.push({
           id: `${plan.id}-${b.key}`, studentId: student.id, studentName,
-          academicYear: plan.academic_year ?? '—', amount: b.amount,
+          academicYear: plan.academic_year ?? '—', received, outstanding: b.amount,
           bucketLabel: b.label, bucketSortKey: b.sortKey,
         })
       }
       for (const b of applyPaidWaterfall(monthBucketsForPlan(plan, expected), paid)) {
-        if (b.startDate > today || b.amount <= 0.01) continue
+        if (b.startDate > today) continue
+        const received = receivedInRange(b.startDate, b.endDate)
+        if (b.amount <= 0.01 && received <= 0.01) continue
         outstandingMonth.push({
           id: `${plan.id}-${b.key}`, studentId: student.id, studentName,
-          academicYear: plan.academic_year ?? '—', amount: b.amount,
+          academicYear: plan.academic_year ?? '—', received, outstanding: b.amount,
           bucketLabel: b.label, bucketSortKey: b.sortKey,
         })
       }
@@ -739,8 +756,9 @@ export default function TuitionPage() {
       ) : tab === 'semester_due' || tab === 'month_due' ? (
         <div className="space-y-5">
           <p className="text-xs text-slate-400 italic">
-            Estimated — plans aren&apos;t billed with a fixed schedule, so each plan&apos;s total is spread evenly
-            across its date range and payments are applied to the oldest period first.
+            Received is actual payments logged in that period. Outstanding is an estimate — plans aren&apos;t billed
+            with a fixed schedule, so each plan&apos;s total is spread evenly across its date range and payments are
+            applied to the oldest period first. Currently-enrolled students only.
           </p>
           {(tab === 'semester_due' ? byOutstandingSemester : byOutstandingMonth).length === 0 && (
             <div className="text-center py-12 text-slate-400 text-sm">Nothing outstanding.</div>
@@ -753,9 +771,10 @@ export default function TuitionPage() {
                   <span className="font-semibold text-slate-800 text-sm">{group.label}</span>
                 </div>
                 <div className="text-xs text-slate-500">
-                  {group.rows.length} payment{group.rows.length !== 1 ? 's' : ''} ·{' '}
+                  Received <span className="text-green-600 font-medium">{formatCurrency(group.rows.reduce((sum, r) => sum + r.received, 0))}</span>
+                  {' '}· Outstanding{' '}
                   <span className="text-red-600 font-medium">
-                    {formatCurrency(group.rows.reduce((sum, r) => sum + r.amount, 0))}
+                    {formatCurrency(group.rows.reduce((sum, r) => sum + r.outstanding, 0))}
                   </span>
                 </div>
               </div>
@@ -907,7 +926,8 @@ function OutstandingPaymentsTable({ rows }: { rows: OutstandingRow[] }) {
           <tr>
             <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Student</th>
             <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide hidden md:table-cell">Academic Year</th>
-            <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Est. Amount Due</th>
+            <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Received</th>
+            <th className="px-5 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Outstanding</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-50">
@@ -919,13 +939,18 @@ function OutstandingPaymentsTable({ rows }: { rows: OutstandingRow[] }) {
                 </Link>
               </td>
               <td className="px-5 py-3 text-sm text-slate-600 hidden md:table-cell">{r.academicYear}</td>
-              <td className="px-5 py-3 text-right text-sm font-medium text-red-600">{formatCurrency(r.amount)}</td>
+              <td className="px-5 py-3 text-right text-sm text-green-600">
+                {r.received > 0 ? formatCurrency(r.received) : <span className="text-slate-300">—</span>}
+              </td>
+              <td className="px-5 py-3 text-right text-sm font-medium">
+                {r.outstanding > 0 ? <span className="text-red-600">{formatCurrency(r.outstanding)}</span> : <span className="text-slate-300">—</span>}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
       {rows.length === 0 && (
-        <div className="text-center py-12 text-slate-400 text-sm">Nothing outstanding.</div>
+        <div className="text-center py-12 text-slate-400 text-sm">Nothing to show.</div>
       )}
     </div>
   )

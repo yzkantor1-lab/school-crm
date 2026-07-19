@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 
-type TuitionPayment = { id: string; tuition_plan_id: string; amount: number; status: string; payment_type: string | null }
+type TuitionPayment = { id: string; tuition_plan_id: string; amount: number; status: string; payment_type: string | null; payment_date: string | null }
 
 // Runs server-side so the browser never talks to Supabase's REST API directly
 // for this endpoint — some ad blockers / privacy extensions block requests
@@ -20,7 +20,7 @@ export async function GET() {
   while (true) {
     const { data, error } = await supabase
       .from('tuition_payments')
-      .select('id,tuition_plan_id,amount,status,payment_type')
+      .select('id,tuition_plan_id,amount,status,payment_type,payment_date')
       .eq('status', 'paid')
       .in('payment_type', ['tuition', 'building_fund'])
       .gt('id', cursor)
