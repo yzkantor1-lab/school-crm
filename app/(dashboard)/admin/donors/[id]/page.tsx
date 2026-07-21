@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { generateDonationReceiptPDF, getDonationReceiptPdfBase64 } from '@/lib/donationPdf'
 import EmailPdfModal from '@/components/EmailPdfModal'
+import SentLettersPanel from '@/components/SentLettersPanel'
 
 type Donor = {
   id: string; name: string; email: string | null; phone_number: string | null
@@ -221,6 +222,8 @@ export default function DonorDetailPage() {
         )}
       </div>
 
+      <SentLettersPanel donorId={id} />
+
       <div className="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-xl shadow-sm">
         <div className="flex items-center gap-2 mb-1"><DollarSign size={20} /><span className="font-semibold">Total Donated</span></div>
         <p className="text-4xl font-bold">{formatCurrency(totalDonated)}</p>
@@ -305,6 +308,7 @@ export default function DonorDetailPage() {
           defaultSubject={emailModal.defaultSubject}
           defaultBody={emailModal.defaultBody}
           buildAttachment={emailModal.buildAttachment}
+          logContext={{ donorId: id }}
         />
       )}
     </div>

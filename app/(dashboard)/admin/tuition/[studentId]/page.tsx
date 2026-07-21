@@ -16,6 +16,7 @@ import {
   getTuitionBillPdfBase64, getPaymentReceiptPdfBase64,
 } from '@/lib/tuitionPdf'
 import EmailPdfModal from '@/components/EmailPdfModal'
+import SentLettersPanel from '@/components/SentLettersPanel'
 
 type Student = {
   id: string
@@ -907,6 +908,8 @@ export default function StudentTuitionPage() {
         </div>
       )}
 
+      <SentLettersPanel studentId={studentId} />
+
       {/* Active reminders alert */}
       {plans.some(p => ['overdue','today','soon'].includes(reminderStatus(p.reminder_date))) && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2">
@@ -1579,6 +1582,7 @@ export default function StudentTuitionPage() {
           defaultSubject={emailModal.defaultSubject}
           defaultBody={emailModal.defaultBody}
           buildAttachment={emailModal.buildAttachment}
+          logContext={{ studentId }}
         />
       )}
     </div>

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { X, Send, Loader2, Check, AlertCircle } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
 
 type Props = {
   onClose: () => void
@@ -10,9 +11,13 @@ type Props = {
   defaultSubject: string
   defaultBody: string
   buildAttachment: () => Promise<{ filename: string; base64: string }>
+  // Who this letter is about, so the send gets logged to their Communications
+  // history — lets you check later whether it was actually sent.
+  logContext?: { studentId?: string; donorId?: string }
 }
 
-export default function EmailPdfModal({ onClose, defaultRecipients, defaultSubject, defaultBody, buildAttachment }: Props) {
+export default function EmailPdfModal({ onClose, defaultRecipients, defaultSubject, defaultBody, buildAttachment, logContext }: Props) {
+  const supabase = createClient()
   const [to, setTo] = useState(defaultRecipients.join(', '))
   const [subject, setSubject] = useState(defaultSubject)
   const [body, setBody] = useState(defaultBody)
@@ -41,6 +46,21 @@ export default function EmailPdfModal({ onClose, defaultRecipients, defaultSubje
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Failed to send')
       setResult({ type: 'success', msg: `Sent to ${json.sent} recipient${json.sent !== 1 ? 's' : ''}.` })
+
+      if (logContext?.studentId || logContext?.donorId) {
+        // Best-effort — the email already sent successfully, so a logging
+        // failure here shouldn't surface as a send error to the user.
+        const { error: logError } = await supabase.from('communications').insert([{
+          type: 'email',
+          subject: subject.trim(),
+          body: body.trim(),
+          student_id: logContext.studentId ?? null,
+          donor_id: logContext.donorId ?? null,
+          recipients: addresses.join(', '),
+          attachment_filename: filename,
+        }])
+        if (logError) console.warn('Failed to log sent letter:', logError.message)
+      }
     } catch (err) {
       setResult({ type: 'error', msg: err instanceof Error ? err.message : 'Failed to send' })
     } finally {
