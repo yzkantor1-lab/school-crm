@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { processTransaction, isTestMode } from '@/lib/sola/client'
-import { resolveSolaCustomer, resolvePaymentMethod, methodLabel, type NewPaymentMethodInput } from '@/lib/sola/context'
+import { resolveSolaCustomer, resolvePaymentMethod, type NewPaymentMethodInput } from '@/lib/sola/context'
+import { recordApprovedCharge } from '@/lib/sola/ledger'
 
 type ChargeBody = {
   type: 'student' | 'donor'
@@ -11,25 +12,6 @@ type ChargeBody = {
   paymentMethodId?: string
   newPaymentMethod?: NewPaymentMethodInput
   save?: boolean
-}
-
-// Latest-academic-year plan, ties broken by 'active' status — same rule used
-// on the tuition list/detail pages for "which plan is the current one."
-async function findLatestPlan(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  studentId: string
-): Promise<{ id: string } | null> {
-  const { data: plans } = await supabase
-    .from('tuition_plans')
-    .select('id,academic_year,status')
-    .eq('student_id', studentId)
-  if (!plans || !plans.length) return null
-  const sorted = [...plans].sort((a, b) => {
-    const yearCmp = (b.academic_year || '').localeCompare(a.academic_year || '')
-    if (yearCmp !== 0) return yearCmp
-    return (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1)
-  })
-  return sorted[0]
 }
 
 export async function POST(req: Request) {
@@ -76,44 +58,22 @@ export async function POST(req: Request) {
   }])
 
   if (!result.approved) {
-    return NextResponse.json({ approved: false, error: result.error, isTest: testMode })
+    // Exposing Sola's own PaymentMethodId (not raw card/bank data) lets the
+    // UI offer "retry in N days" without asking for payment details again —
+    // it's just Sola's reference to a method the family already authorized
+    // for this attempt.
+    return NextResponse.json({ approved: false, error: result.error, isTest: testMode, solaPaymentMethodId: method.solaPaymentMethodId })
   }
 
-  const refNote = `Sola charge — ref ${result.refNum}${testMode ? ' [TEST MODE]' : ''}`
+  const { warning } = await recordApprovedCharge(supabase, {
+    type: body.type,
+    id: body.id,
+    amount: body.amount,
+    purpose: body.purpose,
+    methodType: method.methodType,
+    refNum: result.refNum,
+    isTest: testMode,
+  })
 
-  if (body.type === 'student' && (body.purpose === 'tuition' || body.purpose === 'building_fund')) {
-    const plan = await findLatestPlan(supabase, body.id)
-    if (!plan) {
-      return NextResponse.json({
-        approved: true, refNum: result.refNum, isTest: testMode,
-        warning: 'Charge succeeded, but this student has no tuition plan to attach it to — record it manually.',
-      })
-    }
-    await supabase.from('tuition_payments').insert([{
-      tuition_plan_id: plan.id,
-      student_id: body.id,
-      amount: body.amount,
-      payment_date: new Date().toISOString().slice(0, 10),
-      status: 'paid',
-      payment_method: methodLabel(method.methodType),
-      payment_type: body.purpose,
-      notes: refNote,
-    }])
-  } else if (body.type === 'student' && body.purpose === 'registration_fee') {
-    await supabase.from('students').update({
-      registration_fee_status: 'paid',
-      registration_fee_paid_date: new Date().toISOString().slice(0, 10),
-    }).eq('id', body.id)
-  } else if (body.type === 'donor') {
-    await supabase.from('donations').insert([{
-      donor_id: body.id,
-      amount: body.amount,
-      donation_method: methodLabel(method.methodType),
-      donation_date: new Date().toISOString().slice(0, 10),
-      purpose: 'General',
-      notes: refNote,
-    }])
-  }
-
-  return NextResponse.json({ approved: true, refNum: result.refNum, isTest: testMode })
+  return NextResponse.json({ approved: true, refNum: result.refNum, isTest: testMode, warning })
 }

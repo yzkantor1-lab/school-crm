@@ -14,6 +14,12 @@ type ScheduleBody = {
   startDate: string
   paymentMethodId?: string
   newPaymentMethod?: NewPaymentMethodInput
+  // Direct Sola PaymentMethodId, bypassing local resolution entirely — used
+  // for the "retry a declined one-time charge in N days" flow, where the
+  // family's payment method was already tokenized (and possibly declined)
+  // moments earlier and re-tokenizing would fail (iFields tokens are
+  // single-use). Not raw payment data — just Sola's own reference.
+  solaPaymentMethodId?: string
   save?: boolean
   daysBetweenRetries?: number
   failedTransactionRetryTimes?: number
@@ -32,21 +38,23 @@ export async function POST(req: Request) {
     || !body.purpose || !body.intervalType || !body.intervalCount || !body.startDate) {
     return NextResponse.json({ error: 'type, id, amount, purpose, intervalType, intervalCount, and startDate are required.' }, { status: 400 })
   }
-  if (!body.paymentMethodId && !body.newPaymentMethod) {
-    return NextResponse.json({ error: 'paymentMethodId or newPaymentMethod is required.' }, { status: 400 })
+  if (!body.paymentMethodId && !body.newPaymentMethod && !body.solaPaymentMethodId) {
+    return NextResponse.json({ error: 'paymentMethodId, newPaymentMethod, or solaPaymentMethodId is required.' }, { status: 400 })
   }
 
   const customer = await resolveSolaCustomer(supabase, body.type, body.id)
   if (!customer.ok) return NextResponse.json({ error: customer.error }, { status: 404 })
 
-  const method = await resolvePaymentMethod(supabase, {
-    type: body.type,
-    id: body.id,
-    solaCustomerId: customer.solaCustomerId,
-    paymentMethodId: body.paymentMethodId,
-    newPaymentMethod: body.newPaymentMethod,
-    save: body.save,
-  })
+  const method = body.solaPaymentMethodId
+    ? { ok: true as const, solaPaymentMethodId: body.solaPaymentMethodId, localPaymentMethodId: null }
+    : await resolvePaymentMethod(supabase, {
+        type: body.type,
+        id: body.id,
+        solaCustomerId: customer.solaCustomerId,
+        paymentMethodId: body.paymentMethodId,
+        newPaymentMethod: body.newPaymentMethod,
+        save: body.save,
+      })
   if (!method.ok) return NextResponse.json({ error: method.error }, { status: 502 })
 
   // Custom01 carries context back to us on every webhook event this schedule
