@@ -142,6 +142,7 @@ type TuitionPlan = {
   status: string | null
   discount_amount: number | null
   building_fund_amount: number | null
+  building_fund_waived: boolean | null
 }
 
 type StudentWithTuition = Student & {
@@ -184,13 +185,14 @@ type OutstandingRow = {
 }
 
 function toExportRow(s: StudentWithTuition) {
+  const buildingFund = s.activePlan?.building_fund_waived ? 0 : Number(s.activePlan?.building_fund_amount ?? 0)
   return {
     ...s,
     activePlanYear: s.activePlan?.academic_year ?? '',
     activePlanStructure: s.activePlan?.payment_structure ?? '',
-    buildingFund: Number(s.activePlan?.building_fund_amount ?? 0),
+    buildingFund,
     expected: s.activePlan
-      ? Number(s.activePlan.total_amount ?? 0) - Number(s.activePlan.discount_amount ?? 0) + Number(s.activePlan.building_fund_amount ?? 0)
+      ? Number(s.activePlan.total_amount ?? 0) - Number(s.activePlan.discount_amount ?? 0) + buildingFund
       : 0,
   }
 }
@@ -308,7 +310,7 @@ export default function TuitionPage() {
     }
 
     const planExpected = (p: TuitionPlan) =>
-      Number(p.total_amount ?? 0) - Number(p.discount_amount ?? 0) + Number(p.building_fund_amount ?? 0)
+      Number(p.total_amount ?? 0) - Number(p.discount_amount ?? 0) + (p.building_fund_waived ? 0 : Number(p.building_fund_amount ?? 0))
     const planPaid = (p: TuitionPlan) =>
       payments.filter(pay => pay.tuition_plan_id === p.id).reduce((sum, pay) => sum + Number(pay.amount), 0)
 

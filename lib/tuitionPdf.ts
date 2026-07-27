@@ -16,6 +16,7 @@ export type BillPlan = {
   total_amount: number | null
   discount_amount: number | null
   building_fund_amount: number | null
+  building_fund_waived: boolean
   payment_structure: string | null
   payment_structure_custom: string | null
 }
@@ -87,7 +88,7 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
 
   const name = studentName(opts.student)
   const netTuition = Number(opts.plan.total_amount ?? 0) - Number(opts.plan.discount_amount ?? 0)
-  const buildingFund = Number(opts.plan.building_fund_amount ?? 0)
+  const buildingFund = opts.plan.building_fund_waived ? 0 : Number(opts.plan.building_fund_amount ?? 0)
   const tuitionPaid = opts.payments
     .filter(p => p.status === 'paid' && (p.payment_type ?? 'tuition') === 'tuition')
     .reduce((s, p) => s + Number(p.amount), 0)
@@ -178,7 +179,9 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
   pushRow('Tuition Paid', `$${tuitionPaid.toFixed(2)}`)
   pushRow('Tuition Balance', tuitionBalance > 0 ? `$${tuitionBalance.toFixed(2)}` : 'Paid in Full', true)
 
-  if (buildingFund > 0 || buildingFundPaid > 0) {
+  if (opts.plan.building_fund_waived) {
+    pushRow('Building Fund', 'Waived')
+  } else if (buildingFund > 0 || buildingFundPaid > 0) {
     pushRow('Building Fund Charge', `$${buildingFund.toFixed(2)}`)
     pushRow('Building Fund Paid', `$${buildingFundPaid.toFixed(2)}`)
     pushRow('Building Fund Balance', buildingFundBalance > 0 ? `$${buildingFundBalance.toFixed(2)}` : 'Paid in Full', true)

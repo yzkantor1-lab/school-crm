@@ -50,7 +50,11 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
   const router = useRouter()
   const supabase = createClient()
   const isNew = !student?.id
-  const [form, setForm] = useState<StudentRow>(student ?? { status: 'active' })
+  // New students get a $250 registration fee queued up automatically — managed
+  // (paid/waived) from the student's Tuition page, not from this form.
+  const [form, setForm] = useState<StudentRow>(
+    student ?? { status: 'active', registration_fee_status: 'pending', registration_fee_amount: '250' }
+  )
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)

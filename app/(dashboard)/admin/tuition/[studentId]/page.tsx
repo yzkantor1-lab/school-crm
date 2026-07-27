@@ -36,6 +36,9 @@ type Student = {
   mother_cell: string | null
   mother_email: string | null
   parents_title: string | null
+  registration_fee_status: 'pending' | 'paid' | 'waived' | null
+  registration_fee_amount: number | null
+  registration_fee_paid_date: string | null
 }
 
 type TuitionPlan = {
@@ -52,6 +55,7 @@ type TuitionPlan = {
   status: string
   discount_amount: number
   building_fund_amount: number | null
+  building_fund_waived: boolean
   notes: string | null
   preferred_payment_method: string | null
   reminder_date: string | null
@@ -104,7 +108,7 @@ const STATUSES = ['pending', 'paid', 'overdue', 'waived'] as const
 // count toward what the family owes; Donation payments don't reduce either.
 function planBalances(plan: TuitionPlan, planPayments: TuitionPayment[]) {
   const netTuition = Number(plan.total_amount) - Number(plan.discount_amount)
-  const buildingFund = Number(plan.building_fund_amount ?? 0)
+  const buildingFund = plan.building_fund_waived ? 0 : Number(plan.building_fund_amount ?? 0)
   const tuitionPaid = planPayments
     .filter(p => p.status === 'paid' && (p.payment_type ?? 'tuition') === 'tuition')
     .reduce((s, p) => s + Number(p.amount), 0)
@@ -456,6 +460,7 @@ const BLANK_PLAN_FORM = {
   end_date: '',
   discount_amount: '0',
   building_fund_amount: '750',
+  building_fund_waived: false,
   notes: '',
   status: 'active',
   preferred_payment_method: '',
@@ -499,7 +504,7 @@ export default function StudentTuitionPage() {
     setLoadError(false)
     try {
       const [{ data: s }, { data: p }, { data: pay }] = await Promise.all([
-        supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title').eq('id', studentId).single(),
+        supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title,registration_fee_status,registration_fee_amount,registration_fee_paid_date').eq('id', studentId).single(),
         supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
         supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
       ])
@@ -517,6 +522,19 @@ export default function StudentTuitionPage() {
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
   useEffect(() => { load() }, [load])
+
+  // Registration fee is a flat one-time charge, not paid incrementally like
+  // tuition/building fund — so these are direct one-click status changes
+  // rather than routing through the detailed Add Payment flow.
+  async function setRegistrationFee(fields: Partial<Pick<Student, 'registration_fee_status' | 'registration_fee_amount' | 'registration_fee_paid_date'>>) {
+    if (!student) return
+    setStudent({ ...student, ...fields })
+    await supabase.from('students').update(fields).eq('id', studentId)
+  }
+  const addRegistrationFee = () => setRegistrationFee({ registration_fee_status: 'pending', registration_fee_amount: 250, registration_fee_paid_date: null })
+  const markRegistrationFeePaid = () => setRegistrationFee({ registration_fee_status: 'paid', registration_fee_paid_date: new Date().toISOString().slice(0, 10) })
+  const waiveRegistrationFee = () => setRegistrationFee({ registration_fee_status: 'waived', registration_fee_paid_date: null })
+  const resetRegistrationFee = () => setRegistrationFee({ registration_fee_status: 'pending', registration_fee_paid_date: null })
 
   // Year group for the form's academic year (drives semester labels + day-proportional billing)
   const formYearGroup = useMemo(
@@ -613,6 +631,7 @@ export default function StudentTuitionPage() {
       end_date: plan.end_date ?? '',
       discount_amount: String(plan.discount_amount ?? 0),
       building_fund_amount: String(plan.building_fund_amount ?? 0),
+      building_fund_waived: !!plan.building_fund_waived,
       notes: plan.notes || '',
       status: plan.status ?? 'active',
       preferred_payment_method: plan.preferred_payment_method || '',
@@ -645,6 +664,7 @@ export default function StudentTuitionPage() {
       end_date: planForm.end_date || null,
       discount_amount: toNum(planForm.discount_amount) ?? 0,
       building_fund_amount: toNum(planForm.building_fund_amount) ?? 0,
+      building_fund_waived: planForm.building_fund_waived,
       notes: planForm.notes || null,
       status: planForm.status,
       preferred_payment_method: planForm.preferred_payment_method || null,
@@ -908,6 +928,55 @@ export default function StudentTuitionPage() {
         </div>
       )}
 
+      {/* Registration Fee — one-time flat fee, tracked separately from tuition plans */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2.5">
+          <Receipt size={16} className="text-slate-400 shrink-0" />
+          <span className="text-sm font-medium text-slate-700">Registration Fee</span>
+          {student.registration_fee_status === 'pending' && (
+            <span className="text-sm text-amber-600 font-medium">{formatCurrency(Number(student.registration_fee_amount ?? 0))} · Pending</span>
+          )}
+          {student.registration_fee_status === 'paid' && (
+            <span className="text-sm text-green-600 font-medium">
+              {formatCurrency(Number(student.registration_fee_amount ?? 0))} · Paid
+              {student.registration_fee_paid_date && ` on ${new Date(student.registration_fee_paid_date + 'T00:00:00').toLocaleDateString()}`}
+            </span>
+          )}
+          {student.registration_fee_status === 'waived' && (
+            <span className="text-sm text-slate-400 font-medium">Waived</span>
+          )}
+          {!student.registration_fee_status && (
+            <span className="text-sm text-slate-400">Not on file</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {!student.registration_fee_status && (
+            <button onClick={addRegistrationFee}
+              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-blue-50 transition-colors">
+              <Plus size={13} /> Add $250 Registration Fee
+            </button>
+          )}
+          {student.registration_fee_status === 'pending' && (
+            <>
+              <button onClick={markRegistrationFeePaid}
+                className="flex items-center gap-1 text-xs text-green-600 hover:text-green-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-green-50 transition-colors">
+                <CheckCircle size={13} /> Mark Paid
+              </button>
+              <button onClick={waiveRegistrationFee}
+                className="text-xs text-slate-500 hover:text-slate-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
+                Waive
+              </button>
+            </>
+          )}
+          {(student.registration_fee_status === 'paid' || student.registration_fee_status === 'waived') && (
+            <button onClick={resetRegistrationFee}
+              className="text-xs text-slate-400 hover:text-slate-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
+              Undo
+            </button>
+          )}
+        </div>
+      </div>
+
       <SentLettersPanel studentId={studentId} />
 
       {/* Active reminders alert */}
@@ -1165,10 +1234,16 @@ export default function StudentTuitionPage() {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">Building Fund Amount</label>
                 <input type="number" step="0.01" min="0" value={planForm.building_fund_amount}
+                  disabled={planForm.building_fund_waived}
                   onChange={e => setPlanForm(f => ({ ...f, building_fund_amount: e.target.value }))}
                   placeholder="0"
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <p className="text-xs text-slate-400 mt-1">Tracked separately from tuition, but counts toward the total balance due.</p>
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400" />
+                <label className="flex items-center gap-1.5 mt-1.5 text-xs text-slate-500">
+                  <input type="checkbox" checked={planForm.building_fund_waived}
+                    onChange={e => setPlanForm(f => ({ ...f, building_fund_waived: e.target.checked }))} />
+                  Waive building fund for this student
+                </label>
+                <p className="text-xs text-slate-400 mt-1">Tracked separately from tuition, but counts toward the total balance due — unless waived.</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">Payment Structure</label>
@@ -1326,13 +1401,19 @@ export default function StudentTuitionPage() {
                         <span>Method: <span className="text-slate-700 font-medium">{paymentMethodLabel(plan.preferred_payment_method)}</span></span>
                       )}
                     </div>
-                    {bal.buildingFund > 0 && (
+                    {(bal.buildingFund > 0 || plan.building_fund_waived) && (
                       <div className="flex items-center gap-4 mt-1 text-sm text-slate-500 flex-wrap">
-                        <span>Building Fund: <span className="text-slate-700 font-medium">{formatCurrency(bal.buildingFund)}</span></span>
-                        <span>Paid: <span className="text-green-600 font-medium">{formatCurrency(bal.buildingFundPaid)}</span></span>
-                        <span>Balance: <span className={`font-medium ${bal.buildingFundBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          {bal.buildingFundBalance > 0 ? formatCurrency(bal.buildingFundBalance) : 'Paid in Full'}
-                        </span></span>
+                        {plan.building_fund_waived ? (
+                          <span>Building Fund: <span className="text-slate-400 font-medium">Waived</span></span>
+                        ) : (
+                          <>
+                            <span>Building Fund: <span className="text-slate-700 font-medium">{formatCurrency(bal.buildingFund)}</span></span>
+                            <span>Paid: <span className="text-green-600 font-medium">{formatCurrency(bal.buildingFundPaid)}</span></span>
+                            <span>Balance: <span className={`font-medium ${bal.buildingFundBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                              {bal.buildingFundBalance > 0 ? formatCurrency(bal.buildingFundBalance) : 'Paid in Full'}
+                            </span></span>
+                          </>
+                        )}
                       </div>
                     )}
                     {bal.buildingFund > 0 && (
