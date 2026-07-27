@@ -4,11 +4,11 @@ import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   School, Users, Heart, BadgeDollarSign, Save, Plus, X, Check,
-  AlertCircle, Settings, Mail, ExternalLink, Wifi, WifiOff
+  AlertCircle, Settings, Mail, ExternalLink, Wifi, WifiOff, CreditCard, Trash2, KeyRound
 } from 'lucide-react'
 import { useSearchParams } from 'next/navigation'
 
-type Tab = 'general' | 'students' | 'donors' | 'tuition' | 'email'
+type Tab = 'general' | 'students' | 'donors' | 'tuition' | 'email' | 'payments'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -480,6 +480,136 @@ function EmailTab() {
   )
 }
 
+function PaymentsTab() {
+  const [state, setState] = useState<{ configured: boolean; masked?: string; updatedAt?: string } | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [keyInput, setKeyInput] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  const load = useCallback(async () => {
+    const res = await fetch('/api/payment-settings')
+    const json = await res.json()
+    setState(json)
+  }, [])
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
+  useEffect(() => { load() }, [load])
+
+  async function save() {
+    if (!keyInput.trim()) { setError('Enter a key value.'); return }
+    setSaving(true); setError('')
+    const res = await fetch('/api/payment-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: keyInput.trim() }),
+    })
+    const json = await res.json()
+    setSaving(false)
+    if (!res.ok) { setError(json.error || 'Failed to save.'); return }
+    setState(json)
+    setKeyInput('')
+    setEditing(false)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2500)
+  }
+
+  async function remove() {
+    if (!confirm('Remove the Sola API key? Payment processing will stop working until a new key is added.')) return
+    setSaving(true); setError('')
+    const res = await fetch('/api/payment-settings', { method: 'DELETE' })
+    const json = await res.json()
+    setSaving(false)
+    if (!res.ok) { setError(json.error || 'Failed to remove.'); return }
+    setState(json)
+  }
+
+  if (!state) return <p className="text-sm text-slate-400">Loading…</p>
+
+  return (
+    <div className="space-y-6">
+      <div className={`flex items-center gap-3 p-4 rounded-xl border ${state.configured ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-200'}`}>
+        <KeyRound size={20} className={state.configured ? 'text-green-600' : 'text-slate-400'} />
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-medium ${state.configured ? 'text-green-800' : 'text-slate-600'}`}>
+            {state.configured ? `Sola API key configured (${state.masked})` : 'No Sola API key configured'}
+          </p>
+          {state.configured && state.updatedAt && (
+            <p className="text-xs text-green-600 mt-0.5">Last updated {new Date(state.updatedAt).toLocaleString()}</p>
+          )}
+          <p className="text-xs text-slate-400 mt-0.5">
+            The key is never displayed once saved — only the last 4 characters are shown, and it&apos;s stored where
+            only this server can read it, never the browser.
+          </p>
+        </div>
+      </div>
+
+      {saved && (
+        <div className="flex items-center gap-2 text-green-700 text-sm bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          <Check size={15} /> Saved.
+        </div>
+      )}
+      {error && (
+        <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          <AlertCircle size={15} /> {error}
+        </div>
+      )}
+
+      {editing ? (
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">
+              {state.configured ? 'New Sola API Key' : 'Sola API Key'}
+            </label>
+            <input
+              type="password"
+              value={keyInput}
+              onChange={e => setKeyInput(e.target.value)}
+              placeholder="Paste the key here"
+              autoComplete="off"
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={save}
+              disabled={saving}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              {saving ? 'Saving…' : 'Save Key'}
+            </button>
+            <button
+              onClick={() => { setEditing(false); setKeyInput(''); setError('') }}
+              className="px-4 py-2 rounded-lg text-sm text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <button
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            <KeyRound size={15} /> {state.configured ? 'Replace Key' : 'Add Key'}
+          </button>
+          {state.configured && (
+            <button
+              onClick={remove}
+              disabled={saving}
+              className="flex items-center gap-2 text-red-600 hover:bg-red-50 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium border border-red-200 transition-colors"
+            >
+              <Trash2 size={15} /> Remove Key
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode; description: string }[] = [
@@ -512,6 +642,12 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode; description: string
     label: 'Email',
     icon: <Mail size={17} />,
     description: 'Google Workspace email integration',
+  },
+  {
+    id: 'payments',
+    label: 'Payment Settings',
+    icon: <CreditCard size={17} />,
+    description: 'Sola payment processor API key',
   },
 ]
 
@@ -567,6 +703,7 @@ function SettingsContent() {
           {tab === 'donors'   && <DonorsTab />}
           {tab === 'tuition'  && <TuitionTab />}
           {tab === 'email'    && <EmailTab />}
+          {tab === 'payments' && <PaymentsTab />}
         </div>
       </div>
     </div>
