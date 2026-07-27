@@ -144,6 +144,11 @@ export const SEMESTER_BY_VALUE = new Map<string, SemesterOption>(
 // Set of all known values (for legacy detection)
 export const ALL_SEMESTER_VALUES = new Set(SEMESTER_BY_VALUE.keys())
 
+// True if an ISO "YYYY-MM-DD" date is still in the future.
+export function isDateUpcoming(dateStr: string | null | undefined): boolean {
+  return !!dateStr && dateStr > new Date().toISOString().slice(0, 10)
+}
+
 // True if the semester a student is coming in hasn't started yet. Used to
 // show a "Pending" badge instead of "Active" — purely cosmetic, computed
 // live from today's date rather than stored, so it flips to Active on its
@@ -152,9 +157,7 @@ export const ALL_SEMESTER_VALUES = new Set(SEMESTER_BY_VALUE.keys())
 // are never gated by this.
 export function isSemesterUpcoming(cameSemester: string | null | undefined): boolean {
   if (!cameSemester) return false
-  const startDate = SEMESTER_BY_VALUE.get(cameSemester)?.startDate
-  if (!startDate) return false
-  return startDate > new Date().toISOString().slice(0, 10)
+  return isDateUpcoming(SEMESTER_BY_VALUE.get(cameSemester)?.startDate)
 }
 
 // Status label to actually display for a student — 'pending' overrides an

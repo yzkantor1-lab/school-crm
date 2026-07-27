@@ -10,7 +10,7 @@ import {
   Phone, MapPin
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
-import { SCHOOL_YEAR_SEMESTERS, studentDisplayStatus } from '@/lib/semesters'
+import { SCHOOL_YEAR_SEMESTERS, studentDisplayStatus, isDateUpcoming } from '@/lib/semesters'
 import {
   generateTuitionBillPDF, generatePaymentReceiptPDF,
   getTuitionBillPdfBase64, getPaymentReceiptPdfBase64,
@@ -151,6 +151,15 @@ function getYearGroup(academicYear: string) {
 
 function isSemesterStartDate(date: string, yearGroup?: ReturnType<typeof getYearGroup>): boolean {
   return !!date && !!yearGroup && yearGroup.semesters.some(s => s.startDate === date)
+}
+
+// Whether this plan's coverage hasn't started yet — e.g. a plan set up ahead
+// of time for a pending student's upcoming semester. Falls back to the
+// academic year's first semester start date when the plan has no explicit
+// start_date (e.g. an annual/prorated plan).
+function planIsUpcoming(plan: TuitionPlan): boolean {
+  const startDate = plan.start_date || getYearGroup(plan.academic_year)?.semesters[0]?.startDate
+  return isDateUpcoming(startDate)
 }
 
 type ProratedResult = {
@@ -1376,6 +1385,11 @@ export default function StudentTuitionPage() {
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${statusBadge(plan.status)}`}>
                         {plan.status}
                       </span>
+                      {planIsUpcoming(plan) && (
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700" title="This plan's semester hasn't started yet — everything works normally, it just hasn't begun.">
+                          Upcoming
+                        </span>
+                      )}
                       <span className="text-xs text-slate-400 capitalize">{structureLabel(plan)}</span>
                       {plan.preferred_payment_method && (
                         <span className="text-xs text-slate-400">· {paymentMethodLabel(plan.preferred_payment_method)}</span>
