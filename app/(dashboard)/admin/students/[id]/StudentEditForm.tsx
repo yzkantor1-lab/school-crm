@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { SCHOOL_YEAR_SEMESTERS, ALL_SEMESTER_VALUES } from '@/lib/semesters'
+import { SCHOOL_YEAR_SEMESTERS, ALL_SEMESTER_VALUES, isSemesterUpcoming } from '@/lib/semesters'
 
 const field = (label: string, key: string, required = false) => ({ label, key, type: 'text', required })
 const dateField = (label: string, key: string) => ({ label, key, type: 'date', required: false })
@@ -126,6 +126,11 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
               <option value="graduated">Graduated</option>
               <option value="withdrawn">Withdrawn</option>
             </select>
+            {(form.status ?? 'active') === 'active' && isSemesterUpcoming(form.came_semester) && (
+              <p className="text-xs text-amber-600 mt-1">
+                Shown as &quot;Pending&quot; until {form.came_semester} starts — tuition, payments, etc. all work normally in the meantime.
+              </p>
+            )}
           </div>
         </div>
       </div>

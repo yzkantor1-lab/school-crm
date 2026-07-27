@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { Users, UserRound, UserCog, BookOpen, Receipt, UtensilsCrossed } from 'lucide-react'
+import { studentDisplayStatus } from '@/lib/semesters'
 
 async function getStat(supabase: Awaited<ReturnType<typeof createClient>>, table: string) {
   const { count } = await supabase.from(table).select('*', { count: 'exact', head: true })
@@ -20,7 +21,7 @@ export default async function DashboardPage() {
 
   const { data: recentStudents } = await supabase
     .from('students')
-    .select('id, first_name, last_name, grade_level, status, created_at')
+    .select('id, first_name, last_name, grade_level, status, came_semester, created_at')
     .order('created_at', { ascending: false })
     .limit(5)
 
@@ -76,9 +77,16 @@ export default async function DashboardPage() {
                     <td className="py-2 font-medium text-slate-900">{s.first_name} {s.last_name}</td>
                     <td className="py-2 text-slate-600">{s.grade_level ?? '—'}</td>
                     <td className="py-2">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                        s.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'
-                      }`}>{s.status}</span>
+                      {(() => {
+                        const displayStatus = studentDisplayStatus(s.status, s.came_semester)
+                        return (
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
+                            displayStatus === 'active' ? 'bg-green-100 text-green-700'
+                              : displayStatus === 'pending' ? 'bg-amber-100 text-amber-700'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}>{displayStatus}</span>
+                        )
+                      })()}
                     </td>
                   </tr>
                 ))}

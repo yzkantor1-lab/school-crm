@@ -10,7 +10,7 @@ import {
   Phone, MapPin
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
-import { SCHOOL_YEAR_SEMESTERS } from '@/lib/semesters'
+import { SCHOOL_YEAR_SEMESTERS, studentDisplayStatus } from '@/lib/semesters'
 import {
   generateTuitionBillPDF, generatePaymentReceiptPDF,
   getTuitionBillPdfBase64, getPaymentReceiptPdfBase64,
@@ -858,7 +858,14 @@ export default function StudentTuitionPage() {
               {student.grade_level && `${student.grade_level}`}
               {student.student_id && ` · ID: ${student.student_id}`}
               {` · `}
-              <span className={`capitalize ${student.status === 'active' ? 'text-green-600' : 'text-slate-400'}`}>{student.status}</span>
+              {(() => {
+                const displayStatus = studentDisplayStatus(student.status, student.came_semester)
+                return (
+                  <span className={`capitalize ${displayStatus === 'active' ? 'text-green-600' : displayStatus === 'pending' ? 'text-amber-600' : 'text-slate-400'}`}>
+                    {displayStatus}
+                  </span>
+                )
+              })()}
               {student.came_semester && <span className="text-slate-400"> · Started: {student.came_semester}</span>}
             </p>
           </div>

@@ -143,3 +143,23 @@ export const SEMESTER_BY_VALUE = new Map<string, SemesterOption>(
 
 // Set of all known values (for legacy detection)
 export const ALL_SEMESTER_VALUES = new Set(SEMESTER_BY_VALUE.keys())
+
+// True if the semester a student is coming in hasn't started yet. Used to
+// show a "Pending" badge instead of "Active" — purely cosmetic, computed
+// live from today's date rather than stored, so it flips to Active on its
+// own the day the semester starts without any background job. The student's
+// actual `status` stays 'active' the whole time, so tuition/payments/etc.
+// are never gated by this.
+export function isSemesterUpcoming(cameSemester: string | null | undefined): boolean {
+  if (!cameSemester) return false
+  const startDate = SEMESTER_BY_VALUE.get(cameSemester)?.startDate
+  if (!startDate) return false
+  return startDate > new Date().toISOString().slice(0, 10)
+}
+
+// Status label to actually display for a student — 'pending' overrides an
+// 'active' DB status when their starting semester is still in the future.
+export function studentDisplayStatus(status: string | null | undefined, cameSemester: string | null | undefined): string {
+  if (status === 'active' && isSemesterUpcoming(cameSemester)) return 'pending'
+  return status || 'unknown'
+}

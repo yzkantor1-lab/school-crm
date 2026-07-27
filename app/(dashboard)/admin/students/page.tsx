@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Plus, Search, Users, CalendarDays, BookOpen, ChevronRight, GraduationCap } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
+import { studentDisplayStatus } from '@/lib/semesters'
 
 const EXPORT_COLUMNS = [
   { header: 'First Name',    key: 'first_name' },
@@ -85,8 +86,9 @@ function getSchoolYear(semester: string | null): string {
   return `${year}-${year + 1}`
 }
 
-const statusStyle = (s: string | null) =>
+const statusStyle = (s: string) =>
   s === 'active'    ? 'bg-green-100 text-green-700' :
+  s === 'pending'   ? 'bg-amber-100 text-amber-700' :
   s === 'graduated' ? 'bg-blue-100 text-blue-700'   :
   s === 'withdrawn' ? 'bg-red-100 text-red-700'     :
   'bg-slate-100 text-slate-500'
@@ -347,8 +349,8 @@ function StudentRow({ s, showSemester }: { s: Student; showSemester: boolean }) 
         {s.mother_email && <p className="text-slate-400 text-xs truncate max-w-[160px]">{s.mother_email}</p>}
       </td>
       <td className="px-5 py-3">
-        <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${statusStyle(s.status)}`}>
-          {s.status || 'unknown'}
+        <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${statusStyle(studentDisplayStatus(s.status, s.came_semester))}`}>
+          {studentDisplayStatus(s.status, s.came_semester)}
         </span>
       </td>
       <td className="px-3 py-3 text-right">
