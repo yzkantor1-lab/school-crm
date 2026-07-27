@@ -5,17 +5,18 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SCHOOL_YEAR_SEMESTERS, ALL_SEMESTER_VALUES } from '@/lib/semesters'
 
-const field = (label: string, key: string) => ({ label, key, type: 'text' })
-const dateField = (label: string, key: string) => ({ label, key, type: 'date' })
+const field = (label: string, key: string, required = false) => ({ label, key, type: 'text', required })
+const dateField = (label: string, key: string) => ({ label, key, type: 'date', required: false })
 
 const GRADE_LEVELS = ['First Year', 'Second Year', 'Third Year', 'Fourth Year']
 
 const BASIC_FIELDS = [
-  field('First Name', 'first_name'),
-  field('Last Name', 'last_name'),
+  field('First Name', 'first_name', true),
+  field('Last Name', 'last_name', true),
   field('Student ID', 'student_id'),
   field('Gender', 'gender'),
   dateField('Date of Birth', 'date_of_birth'),
+  dateField('Enrollment Date', 'enrollment_date'),
   field('Social Security Number', 'ssn'),
 ]
 
@@ -45,10 +46,11 @@ const PARENT_FIELDS = [
 
 type StudentRow = Record<string, string | null>
 
-export default function StudentEditForm({ student }: { student: StudentRow }) {
+export default function StudentEditForm({ student }: { student?: StudentRow | null }) {
   const router = useRouter()
   const supabase = createClient()
-  const [form, setForm] = useState<StudentRow>(student)
+  const isNew = !student?.id
+  const [form, setForm] = useState<StudentRow>(student ?? { status: 'active' })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
@@ -58,13 +60,22 @@ export default function StudentEditForm({ student }: { student: StudentRow }) {
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true); setError(''); setSuccess(false)
-    const { error } = await supabase.from('students').update(form).eq('id', student.id)
+
+    if (isNew) {
+      const payload = Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v === '' ? null : v]))
+      const { data, error } = await supabase.from('students').insert([payload]).select('id').single()
+      if (error) { setError(error.message); setLoading(false); return }
+      router.push(`/admin/students/${data.id}`)
+      return
+    }
+
+    const { error } = await supabase.from('students').update(form).eq('id', student!.id)
     if (error) { setError(error.message) } else { setSuccess(true); router.refresh() }
     setLoading(false)
   }
 
   async function handleDelete() {
-    if (!confirm('Delete this student? This cannot be undone.')) return
+    if (!student?.id || !confirm('Delete this student? This cannot be undone.')) return
     await supabase.from('students').delete().eq('id', student.id)
     router.push('/admin/students')
   }
@@ -76,11 +87,12 @@ export default function StudentEditForm({ student }: { student: StudentRow }) {
       <div>
         <h2 className="font-semibold text-slate-900 mb-3">Student Info</h2>
         <div className="space-y-3">
-          {BASIC_FIELDS.map(({ label, key, type }) => (
+          {BASIC_FIELDS.map(({ label, key, type, required }) => (
             <div key={key}>
               <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
               <input
                 type={type}
+                required={required}
                 value={form[key] ?? ''}
                 onChange={e => set(key, e.target.value)}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -371,6 +383,31 @@ export default function StudentEditForm({ student }: { student: StudentRow }) {
         </>
       )}
 
+      {/* Health */}
+      <div className="border-t border-slate-100 pt-4">
+        <h2 className="font-semibold text-slate-900 mb-3">Health</h2>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Allergies</label>
+            <textarea
+              value={form.allergies ?? ''}
+              onChange={e => set('allergies', e.target.value)}
+              rows={2}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Medical Notes</label>
+            <textarea
+              value={form.medical_notes ?? ''}
+              onChange={e => set('medical_notes', e.target.value)}
+              rows={2}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Notes */}
       <div className="border-t border-slate-100 pt-4">
         <label className="block text-xs font-medium text-slate-500 mb-1">Notes</label>
@@ -388,12 +425,14 @@ export default function StudentEditForm({ student }: { student: StudentRow }) {
       <div className="flex gap-2 pt-1">
         <button type="submit" disabled={loading}
           className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium px-4 py-2 rounded-lg disabled:opacity-50 transition-colors">
-          {loading ? 'Saving…' : 'Save'}
+          {loading ? (isNew ? 'Creating…' : 'Saving…') : (isNew ? 'Create Student' : 'Save')}
         </button>
-        <button type="button" onClick={handleDelete}
-          className="text-red-600 hover:bg-red-50 text-xs font-medium px-4 py-2 rounded-lg border border-red-200 transition">
-          Delete
-        </button>
+        {!isNew && (
+          <button type="button" onClick={handleDelete}
+            className="text-red-600 hover:bg-red-50 text-xs font-medium px-4 py-2 rounded-lg border border-red-200 transition">
+            Delete
+          </button>
+        )}
       </div>
     </form>
   )
