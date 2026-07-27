@@ -16,7 +16,17 @@ const BASIC_FIELDS = [
   field('Student ID', 'student_id'),
   field('Gender', 'gender'),
   dateField('Date of Birth', 'date_of_birth'),
+  field('Social Security Number', 'ssn'),
 ]
+
+const GRANDPARENT_FIELDS = (prefix: 'paternal' | 'maternal') => ([
+  ['Grandfather Name',        `${prefix}_grandfather_name`,        'text'],
+  ['Grandmother Name',        `${prefix}_grandmother_name`,        'text'],
+  ['Grandfather Cell',        `${prefix}_grandfather_cell`,        'tel'],
+  ['Grandmother Cell',        `${prefix}_grandmother_cell`,        'tel'],
+  ['Grandfather Email',       `${prefix}_grandfather_email`,       'email'],
+  ['Grandmother Email',       `${prefix}_grandmother_email`,       'email'],
+] as const)
 
 const CONTACT_FIELDS = [
   field('Address', 'address'),
@@ -178,6 +188,78 @@ export default function StudentEditForm({ student }: { student: StudentRow }) {
                 </optgroup>
               ))}
             </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Paternal Grandparents */}
+      <div className="border-t border-slate-100 pt-4">
+        <h2 className="font-semibold text-slate-900 mb-3">Paternal Grandparents</h2>
+        <div className="space-y-3">
+          {GRANDPARENT_FIELDS('paternal').map(([label, key, type]) => (
+            <div key={key}>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
+              <input
+                type={type}
+                value={form[key] ?? ''}
+                onChange={e => set(key, e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          ))}
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Address</label>
+            <textarea
+              value={form.paternal_grandparents_address ?? ''}
+              onChange={e => set('paternal_grandparents_address', e.target.value)}
+              rows={2}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Home Number</label>
+            <input
+              type="tel"
+              value={form.paternal_grandparents_home_phone ?? ''}
+              onChange={e => set('paternal_grandparents_home_phone', e.target.value)}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Maternal Grandparents */}
+      <div className="border-t border-slate-100 pt-4">
+        <h2 className="font-semibold text-slate-900 mb-3">Maternal Grandparents</h2>
+        <div className="space-y-3">
+          {GRANDPARENT_FIELDS('maternal').map(([label, key, type]) => (
+            <div key={key}>
+              <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
+              <input
+                type={type}
+                value={form[key] ?? ''}
+                onChange={e => set(key, e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          ))}
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Address</label>
+            <textarea
+              value={form.maternal_grandparents_address ?? ''}
+              onChange={e => set('maternal_grandparents_address', e.target.value)}
+              rows={2}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Home Number</label>
+            <input
+              type="tel"
+              value={form.maternal_grandparents_home_phone ?? ''}
+              onChange={e => set('maternal_grandparents_home_phone', e.target.value)}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
         </div>
       </div>
