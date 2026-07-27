@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import {
   ArrowLeft, GraduationCap, Plus, X, DollarSign, CheckCircle,
   Clock, AlertCircle, Edit2, Trash2, Bell, BellOff, CalendarRange, Printer, Receipt, Mail,
-  Phone, MapPin
+  Phone, MapPin, CreditCard, Repeat
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
 import { SCHOOL_YEAR_SEMESTERS, studentDisplayStatus, isDateUpcoming } from '@/lib/semesters'
@@ -17,6 +17,8 @@ import {
 } from '@/lib/tuitionPdf'
 import EmailPdfModal from '@/components/EmailPdfModal'
 import SentLettersPanel from '@/components/SentLettersPanel'
+import ChargeModal from '@/components/sola/ChargeModal'
+import RecurringModal from '@/components/sola/RecurringModal'
 
 type Student = {
   id: string
@@ -509,17 +511,23 @@ export default function StudentTuitionPage() {
   const [editingPayment, setEditingPayment]   = useState<TuitionPayment | null>(null)
   const [savingPayment, setSavingPayment]     = useState(false)
 
+  const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
+  const [showChargeModal, setShowChargeModal] = useState(false)
+  const [showRecurringModal, setShowRecurringModal] = useState(false)
+
   const load = useCallback(async () => {
     setLoadError(false)
     try {
-      const [{ data: s }, { data: p }, { data: pay }] = await Promise.all([
+      const [{ data: s }, { data: p }, { data: pay }, { data: pm }] = await Promise.all([
         supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title,registration_fee_status,registration_fee_amount,registration_fee_paid_date').eq('id', studentId).single(),
         supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
         supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
+        supabase.from('payment_methods').select('id,label').eq('student_id', studentId).order('created_at', { ascending: false }),
       ])
       setStudent(s)
       setPlans(p || [])
       setPayments(pay || [])
+      setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
     } catch {
       // Network-level fetch failure (flaky connection, ad blocker) that
       // survived the Supabase client's own retries — surface a retry
@@ -879,14 +887,58 @@ export default function StudentTuitionPage() {
             </p>
           </div>
         </div>
-        <button
-          onClick={openAddPlan}
-          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
-        >
-          <Plus size={16} />
-          Add Plan
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowChargeModal(true)}
+            className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+          >
+            <CreditCard size={16} />
+            Charge Now
+          </button>
+          <button
+            onClick={() => setShowRecurringModal(true)}
+            className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+          >
+            <Repeat size={16} />
+            Recurring / Payment Plan
+          </button>
+          <button
+            onClick={openAddPlan}
+            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          >
+            <Plus size={16} />
+            Add Plan
+          </button>
+        </div>
       </div>
+
+      {showChargeModal && (
+        <ChargeModal
+          onClose={() => setShowChargeModal(false)}
+          type="student"
+          id={studentId}
+          purposeOptions={[
+            { value: 'tuition', label: 'Tuition' },
+            { value: 'building_fund', label: 'Building Fund' },
+            { value: 'registration_fee', label: 'Registration Fee' },
+          ]}
+          savedMethods={savedPaymentMethods}
+          onCharged={load}
+        />
+      )}
+      {showRecurringModal && (
+        <RecurringModal
+          onClose={() => setShowRecurringModal(false)}
+          type="student"
+          id={studentId}
+          purposeOptions={[
+            { value: 'tuition', label: 'Tuition' },
+            { value: 'building_fund', label: 'Building Fund' },
+          ]}
+          savedMethods={savedPaymentMethods}
+          onCreated={load}
+        />
+      )}
 
       {/* Contact info — so there's no need to jump to the student file while working on tuition */}
       {(student.address || student.home_phone || student.father_name || student.father_cell || student.father_email

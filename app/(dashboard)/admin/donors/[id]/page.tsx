@@ -12,6 +12,8 @@ import {
 import { generateDonationReceiptPDF, getDonationReceiptPdfBase64 } from '@/lib/donationPdf'
 import EmailPdfModal from '@/components/EmailPdfModal'
 import SentLettersPanel from '@/components/SentLettersPanel'
+import ChargeModal from '@/components/sola/ChargeModal'
+import RecurringModal from '@/components/sola/RecurringModal'
 
 type Donor = {
   id: string; name: string; email: string | null; phone_number: string | null
@@ -45,6 +47,9 @@ export default function DonorDetailPage() {
     defaultBody: string
     buildAttachment: () => Promise<{ filename: string; base64: string }>
   } | null>(null)
+  const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
+  const [showChargeModal, setShowChargeModal] = useState(false)
+  const [showRecurringModal, setShowRecurringModal] = useState(false)
 
   const fetchSettings = useCallback(async () => {
     const { data } = await supabase.from('donor_settings').select('*').limit(1).maybeSingle()
@@ -58,15 +63,17 @@ export default function DonorDetailPage() {
 
   const fetchData = useCallback(async () => {
     setLoading(true)
-    const [{ data: d }, { data: dn }] = await Promise.all([
+    const [{ data: d }, { data: dn }, { data: pm }] = await Promise.all([
       supabase.from('donors').select('*').eq('id', id).maybeSingle(),
       supabase.from('donations').select('*').eq('donor_id', id).order('donation_date', { ascending: false }),
+      supabase.from('payment_methods').select('id,label').eq('donor_id', id).order('created_at', { ascending: false }),
     ])
     if (d) {
       setDonor(d)
       setDonorForm({ name: d.name, email: d.email || '', phone_number: d.phone_number || '', address: d.address || '', category: d.category || 'General', relationship: d.relationship || 'Other' })
     }
     setDonations(dn || [])
+    setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
     setLoading(false)
   }, [id, supabase])
 
@@ -178,6 +185,8 @@ export default function DonorDetailPage() {
           <div className="flex gap-2">
             {!isEditingDonor ? (
               <>
+                <button onClick={() => setShowChargeModal(true)} className="flex items-center gap-2 bg-green-600 text-white px-3 py-1.5 rounded-lg hover:bg-green-700 transition text-sm"><CreditCard size={14} />Charge Now</button>
+                <button onClick={() => setShowRecurringModal(true)} className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition text-sm">Recurring</button>
                 <button onClick={() => setIsEditingDonor(true)} className="flex items-center gap-2 bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition text-sm"><Edit2 size={14} />Edit</button>
                 <button onClick={deleteDonor} className="flex items-center gap-2 bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700 transition text-sm"><Trash2 size={14} />Delete</button>
               </>
@@ -309,6 +318,26 @@ export default function DonorDetailPage() {
           defaultBody={emailModal.defaultBody}
           buildAttachment={emailModal.buildAttachment}
           logContext={{ donorId: id }}
+        />
+      )}
+      {showChargeModal && (
+        <ChargeModal
+          onClose={() => setShowChargeModal(false)}
+          type="donor"
+          id={id}
+          purposeOptions={[{ value: 'donation', label: 'Donation' }]}
+          savedMethods={savedPaymentMethods}
+          onCharged={fetchData}
+        />
+      )}
+      {showRecurringModal && (
+        <RecurringModal
+          onClose={() => setShowRecurringModal(false)}
+          type="donor"
+          id={id}
+          purposeOptions={[{ value: 'donation', label: 'Donation' }]}
+          savedMethods={savedPaymentMethods}
+          onCreated={fetchData}
         />
       )}
     </div>
