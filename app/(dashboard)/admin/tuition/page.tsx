@@ -431,6 +431,13 @@ export default function TuitionPage() {
       return
     }
 
+    // Best-effort — Sola client sync shouldn't block the student record from being created.
+    fetch('/api/sola/customers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'student', id: data.id }),
+    }).catch(err => console.warn('Sola customer sync failed:', err))
+
     router.push(`/admin/tuition/${data.id}`)
   }
 

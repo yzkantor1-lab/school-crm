@@ -85,15 +85,21 @@ export default function DonorsPage() {
 
   async function addDonor(e: React.FormEvent) {
     e.preventDefault()
-    const { error } = await supabase.from('donors').insert([{
+    const { data, error } = await supabase.from('donors').insert([{
       name: formData.name,
       email: formData.email || null,
       address: formData.address || null,
       phone_number: formData.phone_number || null,
       category: formData.category,
       relationship: formData.relationship,
-    }])
+    }]).select('id').single()
     if (error) { alert('Error adding donor.'); return }
+    // Best-effort — Sola client sync shouldn't block the donor record from being created.
+    fetch('/api/sola/customers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'donor', id: data.id }),
+    }).catch(err => console.warn('Sola customer sync failed:', err))
     setFormData({ name: '', email: '', address: '', phone_number: '', category: donorCategories[0] || '', relationship: relationships[0] || '' })
     setShowAddForm(false)
     fetchDonors()

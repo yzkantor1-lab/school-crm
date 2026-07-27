@@ -69,6 +69,12 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
       const payload = Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v === '' ? null : v]))
       const { data, error } = await supabase.from('students').insert([payload]).select('id').single()
       if (error) { setError(error.message); setLoading(false); return }
+      // Best-effort — Sola client sync shouldn't block the student record from being created.
+      fetch('/api/sola/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'student', id: data.id }),
+      }).catch(err => console.warn('Sola customer sync failed:', err))
       router.push(`/admin/students/${data.id}`)
       return
     }
