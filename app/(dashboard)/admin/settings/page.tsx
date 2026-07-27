@@ -481,10 +481,11 @@ function EmailTab() {
 }
 
 function PaymentsTab() {
-  const [state, setState] = useState<{ configured: boolean; masked?: string; updatedAt?: string } | null>(null)
+  const [state, setState] = useState<{ configured: boolean; masked?: string; updatedAt?: string; testMode: boolean } | null>(null)
   const [editing, setEditing] = useState(false)
   const [keyInput, setKeyInput] = useState('')
   const [saving, setSaving] = useState(false)
+  const [togglingTestMode, setTogglingTestMode] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
 
@@ -508,7 +509,7 @@ function PaymentsTab() {
     const json = await res.json()
     setSaving(false)
     if (!res.ok) { setError(json.error || 'Failed to save.'); return }
-    setState(json)
+    setState(s => s ? { ...s, ...json } : json)
     setKeyInput('')
     setEditing(false)
     setSaved(true)
@@ -522,13 +523,54 @@ function PaymentsTab() {
     const json = await res.json()
     setSaving(false)
     if (!res.ok) { setError(json.error || 'Failed to remove.'); return }
-    setState(json)
+    setState(s => s ? { ...s, ...json } : json)
+  }
+
+  async function toggleTestMode() {
+    if (!state) return
+    const next = !state.testMode
+    if (!next && !confirm('Switch to LIVE mode? Real charges will be sent to Sola and real money will move. Are you sure?')) return
+    setTogglingTestMode(true); setError('')
+    const res = await fetch('/api/payment-settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testMode: next }),
+    })
+    const json = await res.json()
+    setTogglingTestMode(false)
+    if (!res.ok) { setError(json.error || 'Failed to update test mode.'); return }
+    setState(s => s ? { ...s, testMode: json.testMode } : s)
   }
 
   if (!state) return <p className="text-sm text-slate-400">Loading…</p>
 
   return (
     <div className="space-y-6">
+      <div className={`flex items-center gap-3 p-4 rounded-xl border-2 ${state.testMode ? 'bg-amber-50 border-amber-300' : 'bg-red-50 border-red-400'}`}>
+        <CreditCard size={20} className={state.testMode ? 'text-amber-600' : 'text-red-600'} />
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-bold ${state.testMode ? 'text-amber-800' : 'text-red-800'}`}>
+            {state.testMode ? 'TEST MODE — no real charges will be processed' : 'LIVE MODE — real charges will be sent to Sola'}
+          </p>
+          <p className={`text-xs mt-0.5 ${state.testMode ? 'text-amber-600' : 'text-red-600'}`}>
+            {state.testMode
+              ? 'Charges, recurring schedules, and payment plans are simulated only. Client sync (creating customer profiles) still happens for real.'
+              : 'Every charge, recurring schedule, and payment plan now processes real money. Turn test mode back on to stop.'}
+          </p>
+        </div>
+        <button
+          onClick={toggleTestMode}
+          disabled={togglingTestMode}
+          className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+            state.testMode
+              ? 'bg-red-600 hover:bg-red-700 text-white'
+              : 'bg-amber-600 hover:bg-amber-700 text-white'
+          }`}
+        >
+          {togglingTestMode ? 'Updating…' : state.testMode ? 'Enable Live Mode' : 'Switch to Test Mode'}
+        </button>
+      </div>
+
       <div className={`flex items-center gap-3 p-4 rounded-xl border ${state.configured ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-200'}`}>
         <KeyRound size={20} className={state.configured ? 'text-green-600' : 'text-slate-400'} />
         <div className="flex-1 min-w-0">
