@@ -23,10 +23,17 @@ export default function ChargeModal({ onClose, type, id, purposeOptions, savedMe
   const [saveMethod, setSaveMethod] = useState(true)
   const [charging, setCharging] = useState(false)
   const [result, setResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
+  // Set only when Sola itself declined the charge (not a network/validation
+  // error) — offers a one-click "retry in N days" using the same payment
+  // method, without asking for card/bank details again.
+  const [declinedMethodId, setDeclinedMethodId] = useState<string | null>(null)
+  const [retryDays, setRetryDays] = useState('3')
+  const [schedulingRetry, setSchedulingRetry] = useState(false)
   const fieldsRef = useRef<PaymentFieldsHandle>(null)
 
   async function charge() {
     setResult(null)
+    setDeclinedMethodId(null)
     const amt = parseFloat(amount)
     if (!amt || amt <= 0) { setResult({ type: 'error', msg: 'Enter a valid amount.' }); return }
 
@@ -49,7 +56,10 @@ export default function ChargeModal({ onClose, type, id, purposeOptions, savedMe
       })
       const responseJson = await res.json()
       if (!res.ok) throw new Error(responseJson.error || 'Charge failed.')
-      if (!responseJson.approved) throw new Error(responseJson.error || 'Charge declined.')
+      if (!responseJson.approved) {
+        if (responseJson.solaPaymentMethodId) setDeclinedMethodId(responseJson.solaPaymentMethodId)
+        throw new Error(responseJson.error || 'Charge declined.')
+      }
 
       setResult({
         type: 'success',
@@ -60,6 +70,35 @@ export default function ChargeModal({ onClose, type, id, purposeOptions, savedMe
       setResult({ type: 'error', msg: err instanceof Error ? err.message : 'Charge failed.' })
     } finally {
       setCharging(false)
+    }
+  }
+
+  async function retryLater() {
+    const days = parseInt(retryDays)
+    const amt = parseFloat(amount)
+    if (!declinedMethodId || !(days > 0) || !amt) return
+
+    setSchedulingRetry(true)
+    try {
+      const startDate = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10)
+      const res = await fetch('/api/sola/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type, id, amount: amt, purpose,
+          intervalType: 'day', intervalCount: days, totalPayments: 1, startDate,
+          solaPaymentMethodId: declinedMethodId,
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Failed to schedule retry.')
+      setResult({ type: 'success', msg: `${json.isTest ? '[TEST MODE] ' : ''}Retry scheduled for ${startDate}.` })
+      setDeclinedMethodId(null)
+      onCharged?.()
+    } catch (err) {
+      setResult({ type: 'error', msg: err instanceof Error ? err.message : 'Failed to schedule retry.' })
+    } finally {
+      setSchedulingRetry(false)
     }
   }
 
@@ -78,6 +117,19 @@ export default function ChargeModal({ onClose, type, id, purposeOptions, savedMe
           }`}>
             {result.type === 'success' ? <Check size={14} className="mt-0.5 flex-shrink-0" /> : <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />}
             {result.msg}
+          </div>
+        )}
+
+        {declinedMethodId && (
+          <div className="flex items-center gap-2 p-3 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-800">
+            <span className="flex-1">Retry in</span>
+            <input type="number" min="1" value={retryDays} onChange={e => setRetryDays(e.target.value)}
+              className="w-16 border border-amber-300 rounded-lg px-2 py-1 text-sm" />
+            <span>day(s)</span>
+            <button onClick={retryLater} disabled={schedulingRetry}
+              className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors">
+              {schedulingRetry ? 'Scheduling…' : 'Schedule Retry'}
+            </button>
           </div>
         )}
 
