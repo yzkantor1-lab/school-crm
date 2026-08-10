@@ -3,9 +3,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Plus, Search, Users, CalendarDays, BookOpen, ChevronRight, GraduationCap } from 'lucide-react'
+import { Plus, Search, Users, CalendarDays, BookOpen, ChevronRight, GraduationCap, ListChecks } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
-import { studentDisplayStatus } from '@/lib/semesters'
+import ContactListModal from '@/components/ContactListModal'
+import { studentDisplayStatus, currentGradeLevel } from '@/lib/semesters'
 
 const EXPORT_COLUMNS = [
   { header: 'First Name',    key: 'first_name' },
@@ -21,8 +22,15 @@ const EXPORT_COLUMNS = [
   { header: 'Parents Title', key: 'parents_title' },
   { header: 'Semester',      key: 'came_semester' },
   { header: 'Status',        key: 'status' },
-  { header: 'Grade',         key: 'grade_level' },
+  { header: 'Grade',         key: 'current_grade_level' },
 ]
+
+// grade_level on the row is the STARTING grade — this computes the current
+// one (auto-advances each academic year) so exports reflect an up-to-date
+// roster instead of whatever grade each student first enrolled at.
+function withCurrentGrade<T extends { grade_level: string | null; came_semester: string | null }>(s: T) {
+  return { ...s, current_grade_level: currentGradeLevel(s.grade_level, s.came_semester) }
+}
 
 type Student = {
   id: string
@@ -45,7 +53,7 @@ type Student = {
 }
 
 type Tab = 'all' | 'semester' | 'year'
-type StatusFilter = 'all' | 'current' | 'graduated'
+type StatusFilter = 'all' | 'current' | 'pending' | 'graduated'
 
 // Semester → sortable number (chronological order)
 function semesterSort(s: string | null): number {
@@ -100,6 +108,11 @@ export default function StudentsPage() {
   const [tab, setTab] = useState<Tab>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('current')
   const [search, setSearch] = useState('')
+  // Persists across filter/tab changes — checking a student under "Current"
+  // and then switching to "Upcoming" to check more doesn't lose the first
+  // selection, since a mixed current+upcoming contact list is the point.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [showContactModal, setShowContactModal] = useState(false)
 
   useEffect(() => {
     supabase
@@ -115,6 +128,10 @@ export default function StudentsPage() {
     const byStatus =
       statusFilter === 'all'       ? students :
       statusFilter === 'graduated' ? students.filter(s => s.status === 'graduated') :
+      // 'pending' here is the same live-computed status shown as "Upcoming"
+      // in the tab label — a student whose came_semester hasn't started
+      // yet. Their real DB status is still 'active' the whole time.
+      statusFilter === 'pending'   ? students.filter(s => studentDisplayStatus(s.status, s.came_semester) === 'pending') :
       students.filter(s => s.status !== 'graduated')
     if (!q) return byStatus
     return byStatus.filter(s =>
@@ -125,6 +142,28 @@ export default function StudentsPage() {
       .some(v => v?.toLowerCase().includes(q))
     )
   }, [students, q, statusFilter])
+
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every(s => selectedIds.has(s.id))
+  function toggleSelectAllFiltered() {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (allFilteredSelected) filtered.forEach(s => next.delete(s.id))
+      else filtered.forEach(s => next.add(s.id))
+      return next
+    })
+  }
+
+  // No checkboxes checked → default to everyone in the current filter/search
+  // (so the button still works if someone never touches a checkbox at all).
+  const contactTargets = selectedIds.size > 0 ? students.filter(s => selectedIds.has(s.id)) : filtered
 
   // Group by semester
   const bySemester = useMemo(() => {
@@ -157,6 +196,7 @@ export default function StudentsPage() {
   const STATUS_FILTERS = [
     { id: 'all' as StatusFilter,       label: 'All' },
     { id: 'current' as StatusFilter,   label: 'Current' },
+    { id: 'pending' as StatusFilter,   label: 'Upcoming' },
     { id: 'graduated' as StatusFilter, label: 'Graduated' },
   ]
 
@@ -186,11 +226,20 @@ export default function StudentsPage() {
           />
         </div>
         <ExportButton
-          data={filtered}
+          data={filtered.map(withCurrentGrade)}
           columns={EXPORT_COLUMNS}
           filename={`students${search ? '-filtered' : ''}`}
           title="Student List"
         />
+        <button
+          onClick={() => setShowContactModal(true)}
+          disabled={contactTargets.length === 0}
+          title={selectedIds.size > 0 ? `Build a contact list from ${selectedIds.size} checked student${selectedIds.size !== 1 ? 's' : ''}` : 'Build a contact list from everyone in the current view'}
+          className="flex items-center gap-2 border border-slate-200 bg-white text-slate-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <ListChecks size={15} />
+          Contact List{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
+        </button>
         <div className="flex bg-slate-100 rounded-lg p-1 gap-1 self-start flex-wrap">
           {STATUS_FILTERS.map(f => (
             <button
@@ -227,22 +276,35 @@ export default function StudentsPage() {
           <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
             <p className="text-xs text-slate-500 font-medium">{filtered.length} student{filtered.length !== 1 ? 's' : ''}</p>
           </div>
-          <table className="w-full text-sm">
-            <thead className="border-b border-slate-100">
-              <tr>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Name</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden sm:table-cell">Semester</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden md:table-cell">Address</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Father Cell</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Mother Cell</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
-                <th className="px-5 py-3 w-8" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {filtered.map(s => <StudentRow key={s.id} s={s} showSemester={true} />)}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-100">
+                <tr>
+                  <th className="px-5 py-3 w-8">
+                    <input
+                      type="checkbox"
+                      checked={allFilteredSelected}
+                      onChange={toggleSelectAllFiltered}
+                      className="w-3.5 h-3.5 text-blue-600 rounded"
+                      title="Select all in current view"
+                    />
+                  </th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Name</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden sm:table-cell">Semester</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden md:table-cell">Address</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Father Cell</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Mother Cell</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
+                  <th className="px-5 py-3 w-8" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {filtered.map(s => (
+                  <StudentRow key={s.id} s={s} showSemester={true} selected={selectedIds.has(s.id)} onToggleSelect={() => toggleSelect(s.id)} />
+                ))}
+              </tbody>
+            </table>
+          </div>
           {filtered.length === 0 && (
             <div className="text-center py-12 text-slate-400 text-sm">
               {search ? 'No students match your search.' : 'No students yet.'}
@@ -271,7 +333,7 @@ export default function StudentsPage() {
                     {groupStudents.length} student{groupStudents.length !== 1 ? 's' : ''}
                   </span>
                   <ExportButton
-                    data={groupStudents}
+                    data={groupStudents.map(withCurrentGrade)}
                     columns={EXPORT_COLUMNS}
                     filename={`students-${label.replace(/[^a-z0-9]/gi, '-').toLowerCase()}`}
                     title={`Students — ${label}`}
@@ -279,35 +341,48 @@ export default function StudentsPage() {
                   />
                 </div>
               </div>
-              <table className="w-full text-sm">
-                <thead className="border-b border-slate-100">
-                  <tr>
-                    <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">Name</th>
-                    {tab === 'year' && (
-                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden sm:table-cell">Semester</th>
-                    )}
-                    <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden md:table-cell">Address</th>
-                    <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Father Cell</th>
-                    <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Mother Cell</th>
-                    <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
-                    <th className="px-5 py-2.5 w-8" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {groupStudents.map(s => (
-                    <StudentRow key={s.id} s={s} showSemester={tab === 'year'} />
-                  ))}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-slate-100">
+                    <tr>
+                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">Name</th>
+                      {tab === 'year' && (
+                        <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden sm:table-cell">Semester</th>
+                      )}
+                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden md:table-cell">Address</th>
+                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Father Cell</th>
+                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hidden lg:table-cell">Mother Cell</th>
+                      <th className="text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
+                      <th className="px-5 py-2.5 w-8" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {groupStudents.map(s => (
+                      <StudentRow key={s.id} s={s} showSemester={tab === 'year'} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ))}
         </div>
+      )}
+
+      {showContactModal && (
+        <ContactListModal students={contactTargets} onClose={() => setShowContactModal(false)} />
       )}
     </div>
   )
 }
 
-function StudentRow({ s, showSemester }: { s: Student; showSemester: boolean }) {
+function StudentRow({
+  s, showSemester, selected, onToggleSelect,
+}: {
+  s: Student
+  showSemester: boolean
+  selected?: boolean
+  onToggleSelect?: () => void
+}) {
   const name = [s.first_name, s.last_name].filter(Boolean).join(' ') || '—'
   const city = (() => {
     if (!s.address) return null
@@ -317,6 +392,16 @@ function StudentRow({ s, showSemester }: { s: Student; showSemester: boolean }) 
 
   return (
     <tr className="hover:bg-slate-50 transition-colors">
+      {onToggleSelect && (
+        <td className="px-5 py-3">
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={onToggleSelect}
+            className="w-3.5 h-3.5 text-blue-600 rounded"
+          />
+        </td>
+      )}
       <td className="px-5 py-3">
         <Link href={`/admin/students/${s.id}`} className="group flex items-center gap-2.5">
           <div className="bg-blue-100 p-1.5 rounded-lg flex-shrink-0">

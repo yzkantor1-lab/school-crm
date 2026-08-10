@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- jspdf-autotable types its jsPDF document param as `any` upstream (see jspdf-autotable/dist/index.d.ts); no more precise type is available for the `doc` handle used throughout this file. */
 
 import { drawLetterheadHeader, drawLetterheadFooter } from './letterhead'
-import { openPreviewTab, showPdfPreview } from './pdfPreview'
+import { showPdfPreview } from './pdfPreview'
 
 export type BillStudent = {
   first_name: string | null
@@ -56,8 +56,14 @@ function studentName(s: BillStudent) {
 }
 
 function paymentTypeLabel(t: string | null | undefined) {
-  return t === 'building_fund' ? 'Building Fund' : t === 'donation' ? 'Donation' : 'Tuition'
+  if (t === 'building_fund') return 'Building Fund'
+  if (t === 'registration_fee') return 'Registration Fee'
+  if (t === 'phone_charge') return 'Phone Charge'
+  if (t === 'donation') return 'Donation'
+  return 'Tuition'
 }
+
+const COUNTS_AS_PAID = ['paid', 'partial', 'forgiven']
 
 // Draws an ad-hoc note (added at print/email time, not stored on the record)
 // just above the letterhead footer. Returns the new y-coordinate.
@@ -90,10 +96,10 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
   const netTuition = Number(opts.plan.total_amount ?? 0) - Number(opts.plan.discount_amount ?? 0)
   const buildingFund = opts.plan.building_fund_waived ? 0 : Number(opts.plan.building_fund_amount ?? 0)
   const tuitionPaid = opts.payments
-    .filter(p => p.status === 'paid' && (p.payment_type ?? 'tuition') === 'tuition')
+    .filter(p => COUNTS_AS_PAID.includes(p.status) && (p.payment_type ?? 'tuition') === 'tuition')
     .reduce((s, p) => s + Number(p.amount), 0)
   const buildingFundPaid = opts.payments
-    .filter(p => p.status === 'paid' && p.payment_type === 'building_fund')
+    .filter(p => COUNTS_AS_PAID.includes(p.status) && p.payment_type === 'building_fund')
     .reduce((s, p) => s + Number(p.amount), 0)
   const tuitionBalance = netTuition - tuitionPaid
   const buildingFundBalance = buildingFund - buildingFundPaid
@@ -242,10 +248,15 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
   return { doc, filename }
 }
 
-export async function generateTuitionBillPDF(opts: BillOpts) {
-  const win = openPreviewTab()
-  const { doc } = await buildBillDoc(opts)
+// `win` must come from a call to openPreviewTab() made by the caller before
+// anything blocking (a prompt() for a note, an await, etc.) — opening it
+// here, after such a call, is too late: browsers stop crediting the click
+// that triggered this once a blocking dialog has been waiting on the user,
+// so window.open silently gets popup-blocked instead of showing the PDF.
+export async function generateTuitionBillPDF(opts: BillOpts, win: Window | null): Promise<{ base64: string; filename: string }> {
+  const { doc, filename } = await buildBillDoc(opts)
   showPdfPreview(doc, win)
+  return { base64: docToBase64(doc), filename }
 }
 
 export async function getTuitionBillPdfBase64(opts: BillOpts): Promise<{ base64: string; filename: string }> {
@@ -262,15 +273,19 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
 
   const name = studentName(opts.student)
   const isDonation = opts.payment.payment_type === 'donation'
+  const isRegFee = opts.payment.payment_type === 'registration_fee'
+  const isPhoneCharge = opts.payment.payment_type === 'phone_charge'
 
-  const headerY = drawLetterheadHeader(doc, isDonation ? 'DONATION RECEIPT' : 'PAYMENT RECEIPT')
+  const headerY = drawLetterheadHeader(doc, isDonation ? 'DONATION RECEIPT' : isRegFee ? 'REGISTRATION FEE RECEIPT' : isPhoneCharge ? 'PHONE CHARGE RECEIPT' : 'PAYMENT RECEIPT')
   const typeLabel = paymentTypeLabel(opts.payment.payment_type)
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
   doc.text(name, 14, headerY)
   doc.setFont('helvetica', 'normal')
-  doc.text(`Academic Year: ${opts.plan.academic_year || '—'}`, 14, headerY + 5)
+  // Registration fee isn't tied to any academic year/plan, so that line would
+  // just read "Academic Year: —" — skip it rather than print a blank field.
+  if (opts.plan.academic_year) doc.text(`Academic Year: ${opts.plan.academic_year}`, 14, headerY + 5)
 
   const rows: [string, string][] = [
     ['Amount', `$${Number(opts.payment.amount).toFixed(2)}`],
@@ -279,6 +294,8 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
   ]
   if (opts.payment.transaction_id) rows.push(['Check / Transaction #', opts.payment.transaction_id])
   rows.push([isDonation ? 'Type' : 'Applied To', typeLabel])
+  if (opts.payment.status === 'partial') rows.push(['Status', 'Partial Payment'])
+  if (opts.payment.status === 'forgiven') rows.push(['Status', 'Forgiven'])
 
   autoTable(doc, {
     startY: headerY + 14,
@@ -316,10 +333,12 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
   return { doc, filename }
 }
 
-export async function generatePaymentReceiptPDF(opts: ReceiptOpts) {
-  const win = openPreviewTab()
-  const { doc } = await buildReceiptDoc(opts)
+// See generateTuitionBillPDF above for why `win` must be opened by the
+// caller before any blocking dialog, not by this function.
+export async function generatePaymentReceiptPDF(opts: ReceiptOpts, win: Window | null): Promise<{ base64: string; filename: string }> {
+  const { doc, filename } = await buildReceiptDoc(opts)
   showPdfPreview(doc, win)
+  return { base64: docToBase64(doc), filename }
 }
 
 export async function getPaymentReceiptPdfBase64(opts: ReceiptOpts): Promise<{ base64: string; filename: string }> {

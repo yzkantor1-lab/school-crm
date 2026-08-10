@@ -7,7 +7,7 @@ type ScheduleBody = {
   type: 'student' | 'donor'
   id: string
   amount: number
-  purpose: 'tuition' | 'building_fund' | 'donation'
+  purpose: 'tuition' | 'building_fund' | 'donation' | 'phone_charge'
   intervalType: 'day' | 'week' | 'month' | 'year'
   intervalCount: number
   totalPayments?: number       // omitted = open-ended recurring; set = payment plan/installments

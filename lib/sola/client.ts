@@ -4,6 +4,7 @@ import type {
   SolaPaymentMethodInput, SolaCreatePaymentMethodResult,
   SolaChargeInput, SolaChargeResult,
   SolaScheduleInput, SolaCreateScheduleResult, SolaUpdateScheduleResult,
+  SolaCustomer, SolaSchedule, SolaTransaction, SolaCustomerDetail,
 } from './types'
 
 // Sola's newer customer/recurring-centric REST API (as opposed to the older
@@ -147,4 +148,108 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
   })
   if (json.Result === 'S') return { ok: true }
   return { ok: false, error: json.Error || 'Failed to cancel schedule' }
+}
+
+// ── Sola Sync (read-only history pull) ──────────────────────────────────────
+// List*/Get* endpoints require X-Recurring-Api-Version (confirmed against
+// the live account — '2.0'/'2.1'/'2.2' are the only supported values, and
+// unlike the write endpoints above, requests fail outright without it).
+const RECURRING_API_VERSION = '2.1'
+const LIST_PAGE_SIZE = 500
+
+type SolaListResponse = { Result?: string; Error?: string; NextToken?: string }
+
+async function solaListRequest<T extends SolaListResponse>(endpoint: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${V2_BASE}${endpoint}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: apiKey(),
+      'X-Recurring-Api-Version': RECURRING_API_VERSION,
+    },
+    body: JSON.stringify({ SoftwareName: SOFTWARE_NAME, SoftwareVersion: SOFTWARE_VERSION, PageSize: LIST_PAGE_SIZE, ...body }),
+  })
+  return (await res.json()) as T
+}
+
+// Fetches every page. Safe at this account's scale (tens to low hundreds of
+// records) — would need a real pagination story in the API/UI if the Sola
+// account ever grows past a few thousand customers/schedules/transactions.
+export async function listAllCustomers(): Promise<SolaCustomer[]> {
+  type Raw = SolaListResponse & { Customers?: Array<{ CustomerId: string; CustomerNumber?: string; BillFirstName?: string; BillLastName?: string; Email?: string }> }
+  const all: SolaCustomer[] = []
+  let nextToken = ''
+  do {
+    const json = await solaListRequest<Raw>('/ListCustomers', { NextToken: nextToken })
+    if (json.Result !== 'S') throw new Error(json.Error || 'Failed to list Sola customers')
+    for (const c of json.Customers ?? []) {
+      all.push({ customerId: c.CustomerId, customerNumber: c.CustomerNumber, billFirstName: c.BillFirstName, billLastName: c.BillLastName, email: c.Email })
+    }
+    nextToken = json.NextToken ?? ''
+  } while (nextToken)
+  return all
+}
+
+export async function listAllSchedules(): Promise<SolaSchedule[]> {
+  type Raw = SolaListResponse & {
+    Schedules?: Array<{
+      ScheduleId: string; CustomerId: string; Description?: string; Amount?: number
+      IntervalType?: string; IntervalCount?: number; TotalPayments?: number
+      PaymentsProcessed?: number; LastProjectedPaymentDate?: string
+    }>
+  }
+  const all: SolaSchedule[] = []
+  let nextToken = ''
+  do {
+    const json = await solaListRequest<Raw>('/ListSchedules', { NextToken: nextToken })
+    if (json.Result !== 'S') throw new Error(json.Error || 'Failed to list Sola schedules')
+    for (const s of json.Schedules ?? []) {
+      all.push({
+        scheduleId: s.ScheduleId, customerId: s.CustomerId, description: s.Description, amount: s.Amount,
+        intervalType: s.IntervalType, intervalCount: s.IntervalCount, totalPayments: s.TotalPayments,
+        paymentsProcessed: s.PaymentsProcessed, nextScheduledRunTime: s.LastProjectedPaymentDate,
+      })
+    }
+    nextToken = json.NextToken ?? ''
+  } while (nextToken)
+  return all
+}
+
+// Fetches full contact detail for one customer — used only at the moment a
+// staff member actually creates a new donor from a Sola customer, not during
+// the bulk sync (ListCustomers is enough for matching; this is the one place
+// address fields are ever populated).
+export async function getCustomerDetail(customerId: string): Promise<SolaCustomerDetail | null> {
+  type Raw = SolaListResponse & {
+    CustomerId?: string; BillFirstName?: string; BillLastName?: string; Email?: string
+    BillStreet?: string; BillCity?: string; BillState?: string; BillZip?: string
+  }
+  const json = await solaListRequest<Raw>('/GetCustomer', { CustomerId: customerId })
+  if (json.Result !== 'S' || !json.CustomerId) return null
+  return {
+    customerId: json.CustomerId, billFirstName: json.BillFirstName, billLastName: json.BillLastName,
+    email: json.Email, billStreet: json.BillStreet, billCity: json.BillCity, billState: json.BillState, billZip: json.BillZip,
+  }
+}
+
+// Only returns transactions tied to a recurring schedule — Sola's own docs
+// describe this endpoint as excluding standalone/one-off transactions, and
+// there's no separate "all transactions" endpoint. One-off charges made
+// directly in Sola's portal won't appear here; the sync UI flags this as a
+// known gap rather than silently claiming complete history.
+export async function listAllTransactions(): Promise<SolaTransaction[]> {
+  type Raw = SolaListResponse & {
+    Transactions?: Array<{ TransactionId: string; ScheduleId?: string; CustomerId: string; TransactionDate: string; GatewayStatus?: string }>
+  }
+  const all: SolaTransaction[] = []
+  let nextToken = ''
+  do {
+    const json = await solaListRequest<Raw>('/ListTransactions', { NextToken: nextToken })
+    if (json.Result !== 'S') throw new Error(json.Error || 'Failed to list Sola transactions')
+    for (const t of json.Transactions ?? []) {
+      all.push({ transactionId: t.TransactionId, scheduleId: t.ScheduleId, customerId: t.CustomerId, transactionDate: t.TransactionDate, gatewayStatus: t.GatewayStatus })
+    }
+    nextToken = json.NextToken ?? ''
+  } while (nextToken)
+  return all
 }

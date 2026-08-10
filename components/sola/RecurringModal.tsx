@@ -13,6 +13,7 @@ type Props = {
   purposeOptions: { value: string; label: string }[]
   savedMethods: SavedMethod[]
   onCreated?: () => void
+  defaultAmount?: number
 }
 
 const INTERVALS = [
@@ -21,8 +22,8 @@ const INTERVALS = [
   { value: 'year', label: 'Yearly' },
 ]
 
-export default function RecurringModal({ onClose, type, id, purposeOptions, savedMethods, onCreated }: Props) {
-  const [amount, setAmount] = useState('')
+export default function RecurringModal({ onClose, type, id, purposeOptions, savedMethods, onCreated, defaultAmount }: Props) {
+  const [amount, setAmount] = useState(defaultAmount != null ? String(defaultAmount) : '')
   const [purpose, setPurpose] = useState(purposeOptions[0]?.value ?? '')
   const [intervalType, setIntervalType] = useState<'week' | 'month' | 'year'>('month')
   const [intervalCount, setIntervalCount] = useState('1')

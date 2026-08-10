@@ -2,15 +2,18 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
 import {
   ArrowLeft, Edit2, Save, X, Trash2, DollarSign, Calendar,
   CreditCard, FileText, User, Mail, Phone, MapPin, Tag, Heart, Archive, ArchiveRestore,
-  Printer
+  Printer, GraduationCap, Search, ExternalLink, PartyPopper
 } from 'lucide-react'
 import { generateDonationReceiptPDF, getDonationReceiptPdfBase64 } from '@/lib/donationPdf'
+import { openPreviewTab } from '@/lib/pdfPreview'
 import EmailPdfModal from '@/components/EmailPdfModal'
+import PrintNoteModal from '@/components/PrintNoteModal'
 import SentLettersPanel from '@/components/SentLettersPanel'
 import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
@@ -22,6 +25,19 @@ type Donor = {
 type Donation = {
   id: string; amount: number; donation_method: string; donation_date: string
   purpose: string; notes: string | null; archived: boolean
+  category: string | null; event_id: string | null; source: string
+  events: { name: string } | null
+}
+type LinkedStudent = { id: string; first_name: string; last_name: string }
+type EventOption = { id: string; name: string }
+
+const DONATION_CATEGORIES = [
+  { value: 'one_time', label: 'One-Time Donation' },
+  { value: 'monthly_recurring', label: 'Monthly Recurring Donation' },
+  { value: 'event', label: 'Event Donation' },
+]
+function categoryLabel(c: string | null) {
+  return DONATION_CATEGORIES.find(x => x.value === c)?.label ?? null
 }
 
 export default function DonorDetailPage() {
@@ -40,16 +56,25 @@ export default function DonorDetailPage() {
   const [editingDonationId, setEditingDonationId] = useState<string | null>(null)
   const [showArchived, setShowArchived] = useState(false)
   const [donorForm, setDonorForm] = useState({ name: '', email: '', phone_number: '', address: '', category: '', relationship: '' })
-  const [donationForm, setDonationForm] = useState({ amount: '', donation_method: '', donation_date: '', purpose: '', notes: '' })
+  const [donationForm, setDonationForm] = useState({ amount: '', donation_method: '', donation_date: '', purpose: '', notes: '', category: 'one_time', event_id: '' })
   const [emailModal, setEmailModal] = useState<{
     defaultRecipients: string[]
     defaultSubject: string
     defaultBody: string
     buildAttachment: () => Promise<{ filename: string; base64: string }>
   } | null>(null)
+  const [pendingPrint, setPendingPrint] = useState<{
+    title: string
+    subject: string
+    run: (note: string | undefined, win: Window | null) => Promise<{ base64: string; filename: string }>
+  } | null>(null)
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
   const [showChargeModal, setShowChargeModal] = useState(false)
   const [showRecurringModal, setShowRecurringModal] = useState(false)
+  const [events, setEvents] = useState<EventOption[]>([])
+  const [linkedStudents, setLinkedStudents] = useState<LinkedStudent[]>([])
+  const [studentQuery, setStudentQuery] = useState('')
+  const [studentMatches, setStudentMatches] = useState<LinkedStudent[]>([])
 
   const fetchSettings = useCallback(async () => {
     const { data } = await supabase.from('donor_settings').select('*').limit(1).maybeSingle()
@@ -63,19 +88,52 @@ export default function DonorDetailPage() {
 
   const fetchData = useCallback(async () => {
     setLoading(true)
-    const [{ data: d }, { data: dn }, { data: pm }] = await Promise.all([
+    const [{ data: d }, { data: dn }, { data: pm }, { data: ev }, { data: ds }] = await Promise.all([
       supabase.from('donors').select('*').eq('id', id).maybeSingle(),
-      supabase.from('donations').select('*').eq('donor_id', id).order('donation_date', { ascending: false }),
+      supabase.from('donations').select('*,events(name)').eq('donor_id', id).order('donation_date', { ascending: false }),
       supabase.from('payment_methods').select('id,label').eq('donor_id', id).order('created_at', { ascending: false }),
+      supabase.from('events').select('id,name').order('event_date', { ascending: false }),
+      supabase.from('donor_students').select('students(id,first_name,last_name)').eq('donor_id', id),
     ])
+    setEvents(ev ?? [])
+    setLinkedStudents(((ds ?? []) as unknown as { students: LinkedStudent }[]).map(r => r.students).filter(Boolean))
     if (d) {
       setDonor(d)
       setDonorForm({ name: d.name, email: d.email || '', phone_number: d.phone_number || '', address: d.address || '', category: d.category || 'General', relationship: d.relationship || 'Other' })
     }
-    setDonations(dn || [])
+    setDonations((dn ?? []) as unknown as Donation[])
     setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
     setLoading(false)
   }, [id, supabase])
+
+  useEffect(() => {
+    const q = studentQuery.trim().toLowerCase()
+    if (q.length < 2) return
+    let cancelled = false
+    supabase.from('students').select('id,first_name,last_name').ilike('first_name', `%${q}%`).limit(20).then(({ data }) => {
+      if (!cancelled) setStudentMatches((data ?? []) as LinkedStudent[])
+    })
+    // Also try matching on last name — schools skew toward last-name search.
+    supabase.from('students').select('id,first_name,last_name').ilike('last_name', `%${q}%`).limit(20).then(({ data }) => {
+      if (!cancelled) setStudentMatches(prev => {
+        const merged = [...prev, ...((data ?? []) as LinkedStudent[])]
+        return Array.from(new Map(merged.map(s => [s.id, s])).values())
+      })
+    })
+    return () => { cancelled = true }
+  }, [studentQuery, supabase])
+
+  async function linkStudent(studentId: string) {
+    await supabase.from('donor_students').upsert([{ donor_id: id, student_id: studentId }], { onConflict: 'donor_id,student_id' })
+    setStudentQuery('')
+    setStudentMatches([])
+    fetchData()
+  }
+
+  async function unlinkStudent(studentId: string) {
+    await supabase.from('donor_students').delete().eq('donor_id', id).eq('student_id', studentId)
+    fetchData()
+  }
 
   /* eslint-disable react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await */
   useEffect(() => {
@@ -107,6 +165,7 @@ export default function DonorDetailPage() {
     const { error } = await supabase.from('donations').update({
       amount: parseFloat(donationForm.amount), donation_method: donationForm.donation_method,
       donation_date: donationForm.donation_date, purpose: donationForm.purpose, notes: donationForm.notes || null,
+      category: donationForm.category, event_id: donationForm.category === 'event' ? (donationForm.event_id || null) : null,
     }).eq('id', donationId)
     if (error) { alert('Error updating donation.'); return }
     setEditingDonationId(null)
@@ -138,10 +197,32 @@ export default function DonorDetailPage() {
     }
   }
 
+  // window.open() has to happen inside the click that actually confirms
+  // printing — a native prompt() beforehand suppresses itself once that
+  // window.open shifts focus off this tab, and calling it after the prompt
+  // is too late for the popup blocker either way. Deferring to
+  // PrintNoteModal's own Continue click sidesteps both.
   function printReceipt(donation: Donation) {
     if (!donor) return
-    const note = prompt('Add a note to this receipt? (optional)') || undefined
-    generateDonationReceiptPDF(receiptOpts(donation, note))
+    setPendingPrint({
+      title: 'Add a note to this receipt?',
+      subject: `Donation Receipt — ${donor.name}`,
+      run: (note, win) => generateDonationReceiptPDF(receiptOpts(donation, note), win),
+    })
+  }
+
+  // Logs the print the same way emailing already logs a send, so Sent
+  // Letters shows both delivery methods.
+  async function confirmPendingPrint(note: string | undefined) {
+    if (!pendingPrint) return
+    const win = openPreviewTab()
+    const { subject } = pendingPrint
+    setPendingPrint(null)
+    const { base64, filename } = await pendingPrint.run(note, win)
+    const { error } = await supabase.from('communications').insert([{
+      type: 'print', subject, donor_id: id, attachment_filename: filename, pdf_base64: base64,
+    }])
+    if (error) console.warn('Failed to log printed letter:', error.message)
   }
 
   function emailReceipt(donation: Donation) {
@@ -231,6 +312,44 @@ export default function DonorDetailPage() {
         )}
       </div>
 
+      {/* Parent/student cross-link — kept entirely separate from donation
+          totals below; this only ever displays which student(s) this donor
+          is a parent of, never mixes tuition data into this page. */}
+      <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <GraduationCap size={16} className="text-slate-400" />
+          <span className="text-sm font-medium text-slate-700">Linked Student{linkedStudents.length === 1 ? '' : 's'}</span>
+        </div>
+        {linkedStudents.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {linkedStudents.map(s => (
+              <span key={s.id} className="inline-flex items-center gap-1.5 bg-blue-50 text-blue-700 text-xs px-2.5 py-1 rounded-full font-medium">
+                <Link href={`/admin/tuition/${s.id}`} className="flex items-center gap-1 hover:underline">
+                  {s.first_name} {s.last_name} <ExternalLink size={10} />
+                </Link>
+                <button onClick={() => unlinkStudent(s.id)} className="text-blue-400 hover:text-red-500"><X size={11} /></button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="relative">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-300" />
+          <input value={studentQuery} onChange={e => setStudentQuery(e.target.value)}
+            placeholder="Link to a student this donor is a parent of…"
+            className="w-full max-w-xs border border-slate-200 rounded-lg pl-7 pr-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          {studentQuery.trim().length >= 2 && studentMatches.length > 0 && (
+            <div className="absolute z-10 mt-1 w-64 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden max-h-48 overflow-y-auto">
+              {studentMatches.filter(s => !linkedStudents.some(ls => ls.id === s.id)).map(s => (
+                <button key={s.id} type="button" onClick={() => linkStudent(s.id)}
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-blue-50 transition-colors">
+                  {s.first_name} {s.last_name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
       <SentLettersPanel donorId={id} />
 
       <div className="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-xl shadow-sm">
@@ -269,6 +388,23 @@ export default function DonorDetailPage() {
                         className="px-3 py-2 border border-slate-300 rounded-lg text-sm">
                         {donationPurposes.map(p => <option key={p} value={p}>{p}</option>)}
                       </select>
+                      <select value={donationForm.category} onChange={e => setDonationForm({ ...donationForm, category: e.target.value })}
+                        className="px-3 py-2 border border-slate-300 rounded-lg text-sm">
+                        {DONATION_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                      </select>
+                      {donationForm.category === 'event' && (
+                        events.length ? (
+                          <select value={donationForm.event_id} onChange={e => setDonationForm({ ...donationForm, event_id: e.target.value })}
+                            className="px-3 py-2 border border-slate-300 rounded-lg text-sm">
+                            <option value="">— select event —</option>
+                            {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+                          </select>
+                        ) : (
+                          <Link href="/admin/events" className="px-3 py-2 border border-amber-200 bg-amber-50 rounded-lg text-xs text-amber-700 flex items-center">
+                            No events yet — create one first →
+                          </Link>
+                        )
+                      )}
                     </div>
                     <textarea value={donationForm.notes} onChange={e => setDonationForm({ ...donationForm, notes: e.target.value })} rows={2}
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="Notes" />
@@ -287,6 +423,17 @@ export default function DonorDetailPage() {
                       <div className="flex items-center gap-3 text-sm text-slate-600 flex-wrap">
                         <span className="flex items-center gap-1"><CreditCard size={12} />{donation.donation_method}</span>
                         <span className="flex items-center gap-1"><FileText size={12} />{donation.purpose}</span>
+                        {categoryLabel(donation.category) && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{categoryLabel(donation.category)}</span>
+                        )}
+                        {donation.events?.name && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 font-medium flex items-center gap-1">
+                            <PartyPopper size={10} />{donation.events.name}
+                          </span>
+                        )}
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${donation.source === 'sola' ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-400'}`}>
+                          {donation.source === 'sola' ? 'Sola' : 'Manual'}
+                        </span>
                       </div>
                       {donation.notes && <p className="text-sm text-slate-500 mt-1">{donation.notes}</p>}
                     </div>
@@ -295,7 +442,7 @@ export default function DonorDetailPage() {
                         className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="View receipt"><Printer size={15} /></button>
                       <button onClick={() => emailReceipt(donation)}
                         className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="Email receipt"><Mail size={15} /></button>
-                      <button onClick={() => { setEditingDonationId(donation.id); setDonationForm({ amount: donation.amount.toString(), donation_method: donation.donation_method, donation_date: donation.donation_date, purpose: donation.purpose, notes: donation.notes || '' }) }}
+                      <button onClick={() => { setEditingDonationId(donation.id); setDonationForm({ amount: donation.amount.toString(), donation_method: donation.donation_method, donation_date: donation.donation_date, purpose: donation.purpose, notes: donation.notes || '', category: donation.category || 'one_time', event_id: donation.event_id || '' }) }}
                         className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"><Edit2 size={15} /></button>
                       <button onClick={() => toggleArchive(donation.id, donation.archived)}
                         className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition">{donation.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}</button>
@@ -318,6 +465,13 @@ export default function DonorDetailPage() {
           defaultBody={emailModal.defaultBody}
           buildAttachment={emailModal.buildAttachment}
           logContext={{ donorId: id }}
+        />
+      )}
+      {pendingPrint && (
+        <PrintNoteModal
+          title={pendingPrint.title}
+          onConfirm={confirmPendingPrint}
+          onClose={() => setPendingPrint(null)}
         />
       )}
       {showChargeModal && (

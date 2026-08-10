@@ -8,7 +8,7 @@ type ChargeBody = {
   type: 'student' | 'donor'
   id: string
   amount: number
-  purpose: 'tuition' | 'building_fund' | 'registration_fee' | 'donation'
+  purpose: 'tuition' | 'building_fund' | 'registration_fee' | 'donation' | 'phone_charge'
   paymentMethodId?: string
   newPaymentMethod?: NewPaymentMethodInput
   save?: boolean

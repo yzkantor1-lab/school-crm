@@ -67,3 +67,54 @@ export type SolaCreateScheduleResult =
 export type SolaUpdateScheduleResult =
   | { ok: true }
   | { ok: false; error: string }
+
+// ── Sola Sync (read-only history pull) ──────────────────────────────────────
+// These three come from the List*/Get* endpoints under docs.solapayments.com/
+// api/recurring, which (unlike the write endpoints above) require the
+// X-Recurring-Api-Version header. Confirmed empirically against the live
+// account: ListTransactions/GetTransaction never return a dollar Amount —
+// only a schedule's Amount is ever exposed, so a transaction's amount has to
+// be inferred from its parent schedule.
+
+export type SolaCustomer = {
+  customerId: string
+  customerNumber?: string
+  billFirstName?: string
+  billLastName?: string
+  email?: string
+}
+
+export type SolaSchedule = {
+  scheduleId: string
+  customerId: string
+  description?: string
+  amount?: number
+  intervalType?: string
+  intervalCount?: number
+  totalPayments?: number
+  paymentsProcessed?: number
+  nextScheduledRunTime?: string
+}
+
+export type SolaTransaction = {
+  transactionId: string
+  scheduleId?: string
+  customerId: string
+  transactionDate: string
+  gatewayStatus?: string
+}
+
+// Full contact detail for one customer — GetCustomer returns more than
+// ListCustomers does (confirmed empirically: address fields only ever show
+// up here, never in the list response). There is no phone field on Sola
+// customers at all, at any endpoint.
+export type SolaCustomerDetail = {
+  customerId: string
+  billFirstName?: string
+  billLastName?: string
+  email?: string
+  billStreet?: string
+  billCity?: string
+  billState?: string
+  billZip?: string
+}

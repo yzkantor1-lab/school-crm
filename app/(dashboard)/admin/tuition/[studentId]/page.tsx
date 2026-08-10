@@ -7,16 +7,19 @@ import { createClient } from '@/lib/supabase/client'
 import {
   ArrowLeft, GraduationCap, Plus, X, DollarSign, CheckCircle,
   Clock, AlertCircle, Edit2, Trash2, Bell, BellOff, CalendarRange, Printer, Receipt, Mail,
-  Phone, MapPin, CreditCard, Repeat
+  Phone, MapPin, CreditCard, Repeat, Ban, CalendarCheck, Heart, Check
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
-import { SCHOOL_YEAR_SEMESTERS, studentDisplayStatus, isDateUpcoming } from '@/lib/semesters'
+import { SCHOOL_YEAR_SEMESTERS, studentDisplayStatus, isDateUpcoming, currentGradeLevel } from '@/lib/semesters'
 import {
   generateTuitionBillPDF, generatePaymentReceiptPDF,
   getTuitionBillPdfBase64, getPaymentReceiptPdfBase64,
 } from '@/lib/tuitionPdf'
+import { openPreviewTab } from '@/lib/pdfPreview'
 import EmailPdfModal from '@/components/EmailPdfModal'
+import PrintNoteModal from '@/components/PrintNoteModal'
 import SentLettersPanel from '@/components/SentLettersPanel'
+import TuitionDocumentsPanel from '@/components/TuitionDocumentsPanel'
 import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
 
@@ -70,7 +73,7 @@ type TuitionPlan = {
 
 type TuitionPayment = {
   id: string
-  tuition_plan_id: string
+  tuition_plan_id: string | null
   student_id: string
   amount: number
   payment_date: string | null
@@ -80,7 +83,38 @@ type TuitionPayment = {
   payment_type: string | null
   transaction_id: string | null
   notes: string | null
+  // First-of-month date this payment applies toward, for yearly-billed plans
+  // with a month-by-month breakdown — lets the backfill view know which past
+  // months are already covered, independent of when the payment was made.
+  period_month: string | null
   created_at: string
+}
+
+// A Sola recurring schedule — used here just to know whether a Phone Charge
+// subscription is currently active for this student, so real credit-card
+// billing continues on Sola's own clock without any monthly staff action.
+type PaymentSchedule = {
+  id: string
+  status: string
+  amount: number
+  start_date: string
+  interval_type: string
+  interval_count: number
+}
+
+// A donation made by this student's linked parent(s) — display-only here,
+// never part of any tuition/building-fund/registration-fee balance math.
+type ParentDonation = {
+  id: string; donor_id: string; amount: number; donation_date: string
+  category: string | null; event_id: string | null; source: string
+  donors: { name: string } | null
+  events: { name: string } | null
+}
+function donationCategoryLabel(c: string | null) {
+  if (c === 'monthly_recurring') return 'Monthly Recurring'
+  if (c === 'event') return 'Event'
+  if (c === 'one_time') return 'One-Time'
+  return null
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -100,11 +134,45 @@ const PAYMENT_METHODS: { value: string; label: string }[] = [
 
 const PAYMENT_STRUCTURES = ['monthly', 'quarterly', 'semester', 'annual', 'custom']
 
+// Registration fee payments have no tuition_plan_id (they aren't tied to a
+// plan/year) — this sentinel stands in for a plan id in showAddPayment/
+// savePayment so the same add/edit-payment machinery can be reused for them.
+const REG_FEE_KEY = 'registration_fee'
+
+// Phone Charge payments have no tuition_plan_id either (same reasoning as
+// registration fee) — its own sentinel so the two never collide.
+const PHONE_CHARGE_KEY = 'phone_charge'
+
+// Building fund payments DO have a real tuition_plan_id — but "Add Payment"
+// can be opened either from the plan's general Payment Records section or
+// from the dedicated Building Fund panel below, and both can be open for the
+// same plan at once. This prefix gives the Building Fund panel's own form
+// instance a distinct showAddPayment key so the two never collide.
+const BF_PREFIX = 'bf:'
+const bfKey = (planId: string) => `${BF_PREFIX}${planId}`
+const isBfKey = (key: string | null) => !!key && key.startsWith(BF_PREFIX)
+const planIdFromKey = (key: string) => (isBfKey(key) ? key.slice(BF_PREFIX.length) : key)
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10)
+}
+
 function structureLabel(plan: Pick<TuitionPlan, 'payment_structure' | 'payment_structure_custom'>) {
   if (plan.payment_structure === 'custom') return plan.payment_structure_custom || 'Custom'
   return plan.payment_structure
 }
-const STATUSES = ['pending', 'paid', 'overdue', 'waived'] as const
+const STATUSES = ['paid', 'partial', 'forgiven', 'pending', 'overdue', 'waived'] as const
+
+// A 'partial' payment is real money received (just not the full amount due
+// yet) and a 'forgiven' payment writes off a charge without money changing
+// hands — both reduce the outstanding balance the same way 'paid' does.
+const COUNTS_AS_PAID = ['paid', 'partial', 'forgiven']
+
+function statusLabel(status: string) {
+  if (status === 'forgiven') return 'Forgiven'
+  if (status === 'partial') return 'Partial'
+  return status.charAt(0).toUpperCase() + status.slice(1)
+}
 
 // Tuition and Building Fund are tracked as separate charges/balances that both
 // count toward what the family owes; Donation payments don't reduce either.
@@ -112,10 +180,10 @@ function planBalances(plan: TuitionPlan, planPayments: TuitionPayment[]) {
   const netTuition = Number(plan.total_amount) - Number(plan.discount_amount)
   const buildingFund = plan.building_fund_waived ? 0 : Number(plan.building_fund_amount ?? 0)
   const tuitionPaid = planPayments
-    .filter(p => p.status === 'paid' && (p.payment_type ?? 'tuition') === 'tuition')
+    .filter(p => COUNTS_AS_PAID.includes(p.status) && (p.payment_type ?? 'tuition') === 'tuition')
     .reduce((s, p) => s + Number(p.amount), 0)
   const buildingFundPaid = planPayments
-    .filter(p => p.status === 'paid' && p.payment_type === 'building_fund')
+    .filter(p => COUNTS_AS_PAID.includes(p.status) && p.payment_type === 'building_fund')
     .reduce((s, p) => s + Number(p.amount), 0)
   const tuitionBalance = netTuition - tuitionPaid
   const buildingFundBalance = buildingFund - buildingFundPaid
@@ -127,11 +195,41 @@ function planBalances(plan: TuitionPlan, planPayments: TuitionPayment[]) {
   }
 }
 
+// Registration fee is a flat one-time charge tracked on the student (not
+// tied to any tuition plan/year), but — like building fund — the amount
+// actually collected is the sum of its 'registration_fee' payment rows, so
+// it can be paid in full, partially, or forgiven just like the others.
+function regFeeBalances(student: Pick<Student, 'registration_fee_amount'>, allPayments: TuitionPayment[]) {
+  const regFeePayments = allPayments.filter(p => p.payment_type === 'registration_fee')
+  const charge = Number(student.registration_fee_amount ?? 0)
+  const paid = regFeePayments
+    .filter(p => COUNTS_AS_PAID.includes(p.status))
+    .reduce((s, p) => s + Number(p.amount), 0)
+  return { regFeePayments, charge, paid, balance: charge - paid }
+}
+
+// Phone Charge is open-ended recurring (no fixed total to be "paid in full"
+// against, unlike registration fee) — just the running history and total
+// collected so far. Whether it's currently billing lives in payment_schedules.
+function phoneChargeTotals(allPayments: TuitionPayment[]) {
+  const phoneChargePayments = allPayments.filter(p => p.payment_type === 'phone_charge')
+  const paid = phoneChargePayments
+    .filter(p => COUNTS_AS_PAID.includes(p.status))
+    .reduce((s, p) => s + Number(p.amount), 0)
+  return { phoneChargePayments, paid }
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function paymentMethodLabel(v: string | null) {
   if (!v) return '—'
   return PAYMENT_METHODS.find(m => m.value === v)?.label ?? v.replace(/_/g, ' ')
+}
+
+function scheduleCadenceLabel(s: PaymentSchedule) {
+  const amt = formatCurrency(Number(s.amount))
+  if (s.interval_type === 'month' && s.interval_count === 1) return `${amt}/mo`
+  return `${amt} every ${s.interval_count} ${s.interval_type}${s.interval_count > 1 ? 's' : ''}`
 }
 
 function reminderStatus(dateStr: string | null): 'none' | 'future' | 'soon' | 'today' | 'overdue' {
@@ -234,7 +332,7 @@ function extractYearFromSemester(value: string | null | undefined): string {
 }
 
 // Month-by-month tuition breakdown for enrolled semesters
-type MonthEntry = { label: string; shortLabel: string; semester: number; days: number; amount: number }
+type MonthEntry = { label: string; shortLabel: string; semester: number; days: number; amount: number; monthKey: string }
 
 function monthlyBreakdown(
   yearlyAmount: number,
@@ -265,6 +363,7 @@ function monthlyBreakdown(
         semester: semNum,
         days,
         amount: (days / totalDays) * yearlyAmount,
+        monthKey: `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-01`,
       })
       cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1)
     }
@@ -272,9 +371,37 @@ function monthlyBreakdown(
   return entries
 }
 
+type MonthBackfillEntry = MonthEntry & { paidSoFar: number; remaining: number; isPast: boolean }
+
+// Months from a yearly-billed plan that aren't fully paid yet, matched
+// against tuition payments by their period_month (not payment_date, since a
+// late payment can still be applied to an earlier month's charge). Used for
+// the backfill view — recording payments against past unpaid months.
+function unpaidMonths(plan: TuitionPlan, planPayments: TuitionPayment[]): MonthBackfillEntry[] {
+  if (!plan.yearly_amount) return []
+  const yearGroup = getYearGroup(plan.academic_year)
+  if (!yearGroup) return []
+  const came = parseInt(plan.plan_came_semester || '1') || 1
+  const left = parseInt(plan.plan_left_semester || '3') || 3
+  const months = monthlyBreakdown(plan.yearly_amount, yearGroup, came, left)
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+
+  return months
+    .map(m => {
+      const paidSoFar = planPayments
+        .filter(p => COUNTS_AS_PAID.includes(p.status) && (p.payment_type ?? 'tuition') === 'tuition' && p.period_month === m.monthKey)
+        .reduce((s, p) => s + Number(p.amount), 0)
+      const monthStart = new Date(m.monthKey + 'T00:00:00')
+      return { ...m, paidSoFar, remaining: m.amount - paidSoFar, isPast: monthStart <= today }
+    })
+    .filter(m => m.remaining > 0.005)
+}
+
 const statusBadge = (status: string) => {
   const map: Record<string, string> = {
     paid: 'bg-green-100 text-green-700',
+    partial: 'bg-amber-100 text-amber-700',
+    forgiven: 'bg-purple-100 text-purple-700',
     pending: 'bg-yellow-100 text-yellow-700',
     overdue: 'bg-red-100 text-red-700',
     waived: 'bg-slate-100 text-slate-600',
@@ -286,8 +413,10 @@ const statusBadge = (status: string) => {
 }
 
 const planStatusIcon = (status: string) => {
-  if (status === 'paid')    return <CheckCircle size={14} className="text-green-600" />
-  if (status === 'overdue') return <AlertCircle size={14} className="text-red-600" />
+  if (status === 'paid')     return <CheckCircle size={14} className="text-green-600" />
+  if (status === 'forgiven') return <Ban size={14} className="text-purple-600" />
+  if (status === 'partial')  return <Clock size={14} className="text-amber-600" />
+  if (status === 'overdue')  return <AlertCircle size={14} className="text-red-600" />
   return <Clock size={14} className="text-yellow-600" />
 }
 
@@ -458,6 +587,160 @@ function YearlyOverview({
   )
 }
 
+// ── Payment form (add/edit) ─────────────────────────────────────────────────
+// Shared between a plan's "Payment Records" section (tuition/building_fund/
+// donation) and the Registration Fee panel (locked to payment_type
+// 'registration_fee', which isn't tied to any plan) — both need the same
+// backdatable-date + flexible-amount + partial/forgiven-status fields.
+
+type PaymentFormState = {
+  amount: string; due_date: string; payment_date: string; period_month: string
+  status: string; payment_method: string; payment_type: string
+  transaction_id: string; notes: string
+}
+
+function PaymentForm({
+  form, setForm, onSubmit, onCancel, editing, saving,
+  remainingBalance, lockedType, monthOptions,
+}: {
+  form: PaymentFormState
+  setForm: React.Dispatch<React.SetStateAction<PaymentFormState>>
+  onSubmit: (e: React.FormEvent) => void
+  onCancel: () => void
+  editing: boolean
+  saving: boolean
+  remainingBalance?: number
+  lockedType?: string
+  monthOptions?: MonthBackfillEntry[]
+}) {
+  return (
+    <div className="bg-slate-50 rounded-lg p-4 mb-3 border border-slate-200">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-medium text-slate-700">{editing ? 'Edit Payment' : 'Record Payment'}</p>
+        <button onClick={onCancel} className="text-slate-400 hover:text-slate-600"><X size={15} /></button>
+      </div>
+      <form onSubmit={onSubmit} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-xs font-medium text-slate-500">Amount</label>
+            {remainingBalance != null && remainingBalance > 0 && (
+              <button type="button"
+                onClick={() => setForm(f => ({ ...f, amount: remainingBalance.toFixed(2), status: 'paid' }))}
+                className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+                Use full balance ({formatCurrency(remainingBalance)})
+              </button>
+            )}
+          </div>
+          <input type="number" step="0.01" min="0" value={form.amount}
+            onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
+            placeholder="Enter the amount actually collected"
+            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">Status</label>
+          <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
+            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            {STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
+          </select>
+          {form.status === 'partial' && (
+            <p className="text-xs text-amber-600 mt-1">Enter only the amount actually collected — log more payments later for the rest.</p>
+          )}
+          {form.status === 'forgiven' && (
+            <p className="text-xs text-purple-600 mt-1">The amount below is written off and won&apos;t count against the balance — no money needs to have changed hands.</p>
+          )}
+        </div>
+        {monthOptions && monthOptions.length > 0 && (
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-medium text-slate-500 mb-1">Applies to Month <span className="font-normal text-slate-400">(optional — for backfilling a past month)</span></label>
+            <select value={form.period_month}
+              onChange={e => {
+                const key = e.target.value
+                const m = monthOptions.find(mo => mo.monthKey === key)
+                setForm(f => ({ ...f, period_month: key, amount: m ? m.remaining.toFixed(2) : f.amount }))
+              }}
+              className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">— not tied to a specific month —</option>
+              {monthOptions.map(m => (
+                <option key={m.monthKey} value={m.monthKey}>
+                  {m.label} — {m.paidSoFar > 0 ? `${formatCurrency(m.remaining)} remaining of ${formatCurrency(m.amount)}` : `${formatCurrency(m.amount)} due`}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">Due Date</label>
+          <input type="date" value={form.due_date}
+            onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))}
+            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">Payment Date <span className="font-normal text-slate-400">(any past or present date)</span></label>
+          <input type="date" value={form.payment_date} max={todayStr()}
+            onChange={e => setForm(f => ({ ...f, payment_date: e.target.value }))}
+            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">Payment Method</label>
+          <select value={form.payment_method} onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))}
+            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="">— select —</option>
+            {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+        </div>
+        {lockedType ? (
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Payment Type</label>
+            <div className={`w-full border rounded-lg px-3 py-1.5 text-sm font-medium ${
+              lockedType === 'building_fund' ? 'border-amber-200 bg-amber-50 text-amber-700' :
+              lockedType === 'phone_charge'  ? 'border-sky-200 bg-sky-50 text-sky-700' :
+              'border-rose-200 bg-rose-50 text-rose-700'
+            }`}>
+              {lockedType === 'building_fund' ? 'Building Fund' : lockedType === 'phone_charge' ? 'Phone Charge' : 'Registration Fee'}
+            </div>
+          </div>
+        ) : (
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Payment Type</label>
+            <select value={form.payment_type} onChange={e => setForm(f => ({ ...f, payment_type: e.target.value }))}
+              className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="tuition">Tuition Payment</option>
+              <option value="building_fund">Building Fund</option>
+              <option value="donation">Donation</option>
+            </select>
+            {form.payment_type === 'donation' && (
+              <p className="text-xs text-slate-400 mt-1">Recorded here, but won&apos;t count toward tuition or building fund balance.</p>
+            )}
+            {form.payment_type === 'building_fund' && (
+              <p className="text-xs text-slate-400 mt-1">Counts toward the building fund balance, not tuition.</p>
+            )}
+          </div>
+        )}
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">Check / Transaction #</label>
+          <input value={form.transaction_id} onChange={e => setForm(f => ({ ...f, transaction_id: e.target.value }))}
+            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="block text-xs font-medium text-slate-500 mb-1">Notes</label>
+          <input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <div className="sm:col-span-2 flex gap-2">
+          <button type="submit" disabled={saving}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors">
+            {saving ? 'Saving…' : editing ? 'Save' : 'Record Payment'}
+          </button>
+          <button type="button" onClick={onCancel}
+            className="px-3 py-1.5 rounded-lg text-xs text-slate-600 border border-slate-200 hover:bg-slate-100 transition-colors">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 const BLANK_PLAN_FORM = {
@@ -495,6 +778,11 @@ export default function StudentTuitionPage() {
     defaultBody: string
     buildAttachment: () => Promise<{ filename: string; base64: string }>
   } | null>(null)
+  const [pendingPrint, setPendingPrint] = useState<{
+    title: string
+    subject: string
+    run: (note: string | undefined, win: Window | null) => Promise<{ base64: string; filename: string }>
+  } | null>(null)
   const [loading, setLoading]   = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [expandedPlan, setExpandedPlan] = useState<string | null>(null)
@@ -506,28 +794,54 @@ export default function StudentTuitionPage() {
   const [leavingMidYear, setLeavingMidYear] = useState(false)
   const [customStartDate, setCustomStartDate] = useState(false)
 
+  // showAddPayment holds either a real tuition_plan_id, or the REG_FEE_KEY
+  // sentinel when recording a registration fee payment (which isn't tied to
+  // any plan).
   const [showAddPayment, setShowAddPayment]   = useState<string | null>(null)
-  const [paymentForm, setPaymentForm]         = useState({ amount: '', due_date: '', payment_date: '', status: 'pending', payment_method: '', payment_type: 'tuition', transaction_id: '', notes: '' })
+  const [paymentForm, setPaymentForm]         = useState({ amount: '', due_date: '', payment_date: '', period_month: '', status: 'paid', payment_method: '', payment_type: 'tuition', transaction_id: '', notes: '' })
   const [editingPayment, setEditingPayment]   = useState<TuitionPayment | null>(null)
   const [savingPayment, setSavingPayment]     = useState(false)
 
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
   const [showChargeModal, setShowChargeModal] = useState(false)
   const [showRecurringModal, setShowRecurringModal] = useState(false)
+  const [showPhoneRecurringModal, setShowPhoneRecurringModal] = useState(false)
+  const [phoneSchedules, setPhoneSchedules] = useState<PaymentSchedule[]>([])
+  const [parentDonations, setParentDonations] = useState<ParentDonation[]>([])
 
   const load = useCallback(async () => {
     setLoadError(false)
     try {
-      const [{ data: s }, { data: p }, { data: pay }, { data: pm }] = await Promise.all([
+      const [{ data: s }, { data: p }, { data: pay }, { data: pm }, { data: ds }, { data: sched }] = await Promise.all([
         supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title,registration_fee_status,registration_fee_amount,registration_fee_paid_date').eq('id', studentId).single(),
         supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
         supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
         supabase.from('payment_methods').select('id,label').eq('student_id', studentId).order('created_at', { ascending: false }),
+        supabase.from('donor_students').select('donor_id').eq('student_id', studentId),
+        supabase.from('payment_schedules').select('id,status,amount,start_date,interval_type,interval_count')
+          .eq('student_id', studentId).eq('purpose', 'phone_charge').order('created_at', { ascending: false }),
       ])
       setStudent(s)
       setPlans(p || [])
       setPayments(pay || [])
       setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
+      setPhoneSchedules(sched || [])
+
+      // Donations made by this student's linked parent(s) — kept in a
+      // completely separate fetch/table from tuition_payments so they can
+      // never leak into tuition/building-fund/registration-fee balances.
+      const donorIds = (ds ?? []).map(r => r.donor_id)
+      if (donorIds.length) {
+        const { data: dons } = await supabase
+          .from('donations')
+          .select('id,donor_id,amount,donation_date,category,event_id,source,donors(name),events(name)')
+          .in('donor_id', donorIds)
+          .eq('archived', false)
+          .order('donation_date', { ascending: false })
+        setParentDonations((dons ?? []) as unknown as ParentDonation[])
+      } else {
+        setParentDonations([])
+      }
     } catch {
       // Network-level fetch failure (flaky connection, ad blocker) that
       // survived the Supabase client's own retries — surface a retry
@@ -540,18 +854,63 @@ export default function StudentTuitionPage() {
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
   useEffect(() => { load() }, [load])
 
-  // Registration fee is a flat one-time charge, not paid incrementally like
-  // tuition/building fund — so these are direct one-click status changes
-  // rather than routing through the detailed Add Payment flow.
+  // registration_fee_status/amount on the student are just "has a fee been
+  // queued, and at what base amount" — actual paid/partial/forgiven amounts
+  // are tracked as tuition_payments rows (payment_type 'registration_fee'),
+  // the same as tuition/building fund, via the shared Add Payment flow below.
   async function setRegistrationFee(fields: Partial<Pick<Student, 'registration_fee_status' | 'registration_fee_amount' | 'registration_fee_paid_date'>>) {
     if (!student) return
     setStudent({ ...student, ...fields })
     await supabase.from('students').update(fields).eq('id', studentId)
   }
   const addRegistrationFee = () => setRegistrationFee({ registration_fee_status: 'pending', registration_fee_amount: 250, registration_fee_paid_date: null })
-  const markRegistrationFeePaid = () => setRegistrationFee({ registration_fee_status: 'paid', registration_fee_paid_date: new Date().toISOString().slice(0, 10) })
-  const waiveRegistrationFee = () => setRegistrationFee({ registration_fee_status: 'waived', registration_fee_paid_date: null })
-  const resetRegistrationFee = () => setRegistrationFee({ registration_fee_status: 'pending', registration_fee_paid_date: null })
+  const removeRegistrationFee = () => setRegistrationFee({ registration_fee_status: null, registration_fee_paid_date: null })
+
+  // Registration fee has no plan-level waived flag to toggle (it isn't tied
+  // to a plan) — "forgive" instead writes a 'forgiven' payment row for
+  // whatever balance remains, the same mechanism the Add Payment form
+  // already supports, just one click instead of opening the form. Undoing
+  // it is already possible via editing/deleting that row in the table below.
+  async function forgiveRegistrationFee(amount: number) {
+    if (!(amount > 0.005)) return
+    await supabase.from('tuition_payments').insert([{
+      tuition_plan_id: null, student_id: studentId, amount, payment_date: todayStr(),
+      status: 'forgiven', payment_type: 'registration_fee', notes: 'Registration fee forgiven',
+    }])
+    load()
+  }
+
+  // Cancels the real Sola recurring schedule (not just a local flag) — same
+  // DELETE endpoint used everywhere else a schedule gets stopped, which
+  // cancels it on Sola's side too so the card actually stops being charged.
+  async function stopPhoneCharge(scheduleId: string) {
+    if (!confirm('Stop the recurring Phone Charge? This cancels the schedule with Sola — no further monthly charges will go through until it\'s set up again.')) return
+    const res = await fetch(`/api/sola/schedule?id=${scheduleId}`, { method: 'DELETE' })
+    if (!res.ok) { const json = await res.json().catch(() => ({})); alert(json.error || 'Failed to stop the recurring charge.'); return }
+    load()
+  }
+
+  // Building Fund stays a per-plan charge (tuition_plan_id set, not null like
+  // registration fee) since it's genuinely billed per academic year here —
+  // but gets the same prominent, dedicated panel treatment. "Forgive" toggles
+  // the existing building_fund_waived flag on the current plan; "alter the
+  // amount" edits building_fund_amount directly, both without needing to
+  // open the full Edit Plan form. Nothing here changes what already feeds
+  // the tuition statement PDF (it already shows Building Fund unless waived).
+  const [editingBFAmount, setEditingBFAmount] = useState(false)
+  const [bfAmountInput, setBfAmountInput] = useState('')
+
+  async function toggleBuildingFundWaived(planId: string, waived: boolean) {
+    setPlans(ps => ps.map(p => p.id === planId ? { ...p, building_fund_waived: waived } : p))
+    await supabase.from('tuition_plans').update({ building_fund_waived: waived }).eq('id', planId)
+  }
+  async function saveBuildingFundAmount(planId: string) {
+    const amount = parseFloat(bfAmountInput)
+    if (!(amount >= 0)) { setEditingBFAmount(false); return }
+    setPlans(ps => ps.map(p => p.id === planId ? { ...p, building_fund_amount: amount } : p))
+    await supabase.from('tuition_plans').update({ building_fund_amount: amount }).eq('id', planId)
+    setEditingBFAmount(false)
+  }
 
   // Year group for the form's academic year (drives semester labels + day-proportional billing)
   const formYearGroup = useMemo(
@@ -707,41 +1066,58 @@ export default function StudentTuitionPage() {
     load()
   }
 
-  function openAddPayment(planId: string) {
+  // `key` is a real tuition_plan_id, REG_FEE_KEY, or bfKey(planId) (the
+  // Building Fund panel's own form instance for that plan). Optional
+  // `prefill` fields support quick actions like "pay in full" and the
+  // backfill months view, which know the amount/type/period up front.
+  function openAddPayment(key: string, prefill?: Partial<typeof paymentForm>) {
     setEditingPayment(null)
-    setPaymentForm({ amount: '', due_date: '', payment_date: '', status: 'pending', payment_method: '', payment_type: 'tuition', transaction_id: '', notes: '' })
-    setExpandedPlan(planId)
-    setShowAddPayment(planId)
+    setPaymentForm({
+      amount: '', due_date: '', payment_date: todayStr(), period_month: '',
+      status: 'paid', payment_method: '',
+      payment_type: key === REG_FEE_KEY ? 'registration_fee' : key === PHONE_CHARGE_KEY ? 'phone_charge' : 'tuition',
+      transaction_id: '', notes: '',
+      ...prefill,
+    })
+    if (key !== REG_FEE_KEY && key !== PHONE_CHARGE_KEY) setExpandedPlan(planIdFromKey(key))
+    setShowAddPayment(key)
   }
 
-  function openEditPayment(payment: TuitionPayment) {
+  // `keyOverride` lets the Building Fund panel's own history table open the
+  // edit form inline in that panel (bfKey) instead of the plan's general
+  // Payment Records section, which is where editing from there still lands.
+  function openEditPayment(payment: TuitionPayment, keyOverride?: string) {
     setEditingPayment(payment)
     setPaymentForm({
       amount: String(payment.amount),
       due_date: payment.due_date || '',
       payment_date: payment.payment_date || '',
+      period_month: payment.period_month || '',
       status: payment.status,
       payment_method: payment.payment_method || '',
       payment_type: payment.payment_type || 'tuition',
       transaction_id: payment.transaction_id || '',
       notes: payment.notes || '',
     })
-    setShowAddPayment(payment.tuition_plan_id)
+    setShowAddPayment(keyOverride ?? (payment.tuition_plan_id || (payment.payment_type === 'phone_charge' ? PHONE_CHARGE_KEY : REG_FEE_KEY)))
   }
 
   async function savePayment(e: React.FormEvent) {
     e.preventDefault()
     if (!showAddPayment) return
     setSavingPayment(true)
+    const isRegFee = showAddPayment === REG_FEE_KEY
+    const isPhoneCharge = showAddPayment === PHONE_CHARGE_KEY
     const payload = {
-      tuition_plan_id: showAddPayment,
+      tuition_plan_id: (isRegFee || isPhoneCharge) ? null : planIdFromKey(showAddPayment),
       student_id: studentId,
       amount: paymentForm.amount !== '' ? parseFloat(paymentForm.amount) : null,
       due_date: paymentForm.due_date || null,
       payment_date: paymentForm.payment_date || null,
+      period_month: paymentForm.period_month || null,
       status: paymentForm.status,
       payment_method: paymentForm.payment_method || null,
-      payment_type: paymentForm.payment_type || 'tuition',
+      payment_type: isRegFee ? 'registration_fee' : isPhoneCharge ? 'phone_charge' : (paymentForm.payment_type || 'tuition'),
       transaction_id: paymentForm.transaction_id || null,
       notes: paymentForm.notes || null,
     }
@@ -800,16 +1176,31 @@ export default function StudentTuitionPage() {
     }
   }
 
+  // window.open() for the preview tab has to happen inside the click that
+  // actually confirms printing — not before a native prompt() (which
+  // suppresses itself once that window.open shifts focus off this tab) and
+  // not after an async gap either (popup-blocked by then). Deferring to the
+  // PrintNoteModal's own Continue click sidesteps both: that click is its
+  // own fresh, direct user gesture.
   function printBill(plan: TuitionPlan, planPayments: TuitionPayment[]) {
     if (!student) return
-    const note = prompt('Add a note to this statement? (optional)') || undefined
-    generateTuitionBillPDF(billArgs(plan, planPayments, note))
+    const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
+    setPendingPrint({
+      title: 'Add a note to this statement?',
+      subject: `Tuition Statement — ${name} (${plan.academic_year})`,
+      run: (note, win) => generateTuitionBillPDF(billArgs(plan, planPayments, note), win),
+    })
   }
 
   function printReceipt(plan: TuitionPlan, payment: TuitionPayment) {
     if (!student) return
-    const note = prompt('Add a note to this receipt? (optional)') || undefined
-    generatePaymentReceiptPDF(receiptArgs(plan, payment, note))
+    const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
+    const typeLabel = payment.payment_type === 'donation' ? 'Donation' : payment.payment_type === 'building_fund' ? 'Building Fund' : 'Payment'
+    setPendingPrint({
+      title: 'Add a note to this receipt?',
+      subject: `${typeLabel} Receipt — ${name}`,
+      run: (note, win) => generatePaymentReceiptPDF(receiptArgs(plan, payment, note), win),
+    })
   }
 
   function emailBill(plan: TuitionPlan, planPayments: TuitionPayment[]) {
@@ -838,6 +1229,103 @@ export default function StudentTuitionPage() {
     })
   }
 
+  // Registration fee payments aren't tied to a plan/academic year, so they
+  // get their own receipt helpers rather than routing through receiptArgs.
+  function regFeeReceiptArgs(payment: TuitionPayment, extraNote?: string) {
+    const bal = regFeeBalances(student!, payments)
+    return {
+      student: student!,
+      plan: {
+        academic_year: null, total_amount: 0, discount_amount: 0,
+        building_fund_amount: 0, building_fund_waived: false,
+        payment_structure: null, payment_structure_custom: null,
+      },
+      payment,
+      balanceAfter: bal.balance,
+      paymentMethodLabel,
+      extraNote,
+    }
+  }
+
+  function printRegFeeReceipt(payment: TuitionPayment) {
+    if (!student) return
+    const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
+    setPendingPrint({
+      title: 'Add a note to this receipt?',
+      subject: `Registration Fee Receipt — ${name}`,
+      run: (note, win) => generatePaymentReceiptPDF(regFeeReceiptArgs(payment, note), win),
+    })
+  }
+
+  function emailRegFeeReceipt(payment: TuitionPayment) {
+    if (!student) return
+    const note = prompt('Add a note to this receipt? (optional)') || undefined
+    const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
+    setEmailModal({
+      defaultRecipients: [student.father_email, student.mother_email].filter((e): e is string => !!e),
+      defaultSubject: `Registration Fee Receipt — ${name}`,
+      defaultBody: `Hi,\n\nPlease find attached your receipt for the registration fee payment of ${formatCurrency(Number(payment.amount))}.\n\nThank you.`,
+      buildAttachment: () => getPaymentReceiptPdfBase64(regFeeReceiptArgs(payment, note)),
+    })
+  }
+
+  // Phone Charge — same plan-independent shape as registration fee, except
+  // there's no fixed total to be "in full" against (it's open-ended
+  // recurring), so balanceAfter is always 0: after this month's payment,
+  // nothing is outstanding for that period.
+  function phoneChargeReceiptArgs(payment: TuitionPayment, extraNote?: string) {
+    return {
+      student: student!,
+      plan: {
+        academic_year: null, total_amount: 0, discount_amount: 0,
+        building_fund_amount: 0, building_fund_waived: false,
+        payment_structure: null, payment_structure_custom: null,
+      },
+      payment,
+      balanceAfter: 0,
+      paymentMethodLabel,
+      extraNote,
+    }
+  }
+
+  function printPhoneChargeReceipt(payment: TuitionPayment) {
+    if (!student) return
+    const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
+    setPendingPrint({
+      title: 'Add a note to this receipt?',
+      subject: `Phone Charge Receipt — ${name}`,
+      run: (note, win) => generatePaymentReceiptPDF(phoneChargeReceiptArgs(payment, note), win),
+    })
+  }
+
+  function emailPhoneChargeReceipt(payment: TuitionPayment) {
+    if (!student) return
+    const note = prompt('Add a note to this receipt? (optional)') || undefined
+    const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
+    setEmailModal({
+      defaultRecipients: [student.father_email, student.mother_email].filter((e): e is string => !!e),
+      defaultSubject: `Phone Charge Receipt — ${name}`,
+      defaultBody: `Hi,\n\nPlease find attached your receipt for the phone charge payment of ${formatCurrency(Number(payment.amount))}.\n\nThank you.`,
+      buildAttachment: () => getPaymentReceiptPdfBase64(phoneChargeReceiptArgs(payment, note)),
+    })
+  }
+
+  // Called from PrintNoteModal's own Continue button — that click is what
+  // actually authorizes opening the preview tab, so window.open() happens
+  // synchronously right here, not before this handler runs. Logs the print
+  // the same way emailing already logs a send, so Sent Letters shows both.
+  async function confirmPendingPrint(note: string | undefined) {
+    if (!pendingPrint) return
+    const win = openPreviewTab()
+    const { subject } = pendingPrint
+    setPendingPrint(null)
+    const { base64, filename } = await pendingPrint.run(note, win)
+    const { error } = await supabase.from('communications').insert([{
+      type: 'print', subject, student_id: studentId, attachment_filename: filename, pdf_base64: base64,
+    }])
+    if (error) console.warn('Failed to log printed letter:', error.message)
+  }
+
   if (loading) return <div className="text-center py-12 text-slate-400 text-sm">Loading…</div>
   if (loadError) return (
     <div className="text-center py-12 text-sm space-y-3">
@@ -849,6 +1337,16 @@ export default function StudentTuitionPage() {
     </div>
   )
   if (!student) return <div className="text-center py-12 text-slate-400 text-sm">Student not found.</div>
+
+  // Building Fund panel operates on the same "current plan" TuitionSection
+  // uses elsewhere: active status wins, else the most recently created plan.
+  const currentPlan = plans.find(p => p.status === 'active') || plans[0]
+  const currentPlanPayments = currentPlan ? payments.filter(p => p.tuition_plan_id === currentPlan.id) : []
+  const bfBal = currentPlan ? planBalances(currentPlan, currentPlanPayments) : null
+  const bfPayments = currentPlanPayments.filter(p => p.payment_type === 'building_fund')
+  const bfFullyForgiven = currentPlan?.building_fund_waived ||
+    (bfPayments.length > 0 && (bfBal?.buildingFundBalance ?? 0) <= 0.005 &&
+      bfPayments.filter(p => COUNTS_AS_PAID.includes(p.status)).every(p => p.status === 'forgiven'))
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -864,7 +1362,7 @@ export default function StudentTuitionPage() {
         </Link>
       </div>
 
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="bg-blue-100 p-2.5 rounded-xl">
             <GraduationCap size={22} className="text-blue-600" />
@@ -872,7 +1370,7 @@ export default function StudentTuitionPage() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">{student.first_name} {student.last_name}</h1>
             <p className="text-sm text-slate-500">
-              {student.grade_level && `${student.grade_level}`}
+              {currentGradeLevel(student.grade_level, student.came_semester)}
               {student.student_id && ` · ID: ${student.student_id}`}
               {` · `}
               {(() => {
@@ -887,7 +1385,7 @@ export default function StudentTuitionPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => setShowChargeModal(true)}
             className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
@@ -921,6 +1419,7 @@ export default function StudentTuitionPage() {
             { value: 'tuition', label: 'Tuition' },
             { value: 'building_fund', label: 'Building Fund' },
             { value: 'registration_fee', label: 'Registration Fee' },
+            { value: 'phone_charge', label: 'Phone Charge' },
           ]}
           savedMethods={savedPaymentMethods}
           onCharged={load}
@@ -934,8 +1433,20 @@ export default function StudentTuitionPage() {
           purposeOptions={[
             { value: 'tuition', label: 'Tuition' },
             { value: 'building_fund', label: 'Building Fund' },
+            { value: 'phone_charge', label: 'Phone Charge' },
           ]}
           savedMethods={savedPaymentMethods}
+          onCreated={load}
+        />
+      )}
+      {showPhoneRecurringModal && (
+        <RecurringModal
+          onClose={() => setShowPhoneRecurringModal(false)}
+          type="student"
+          id={studentId}
+          purposeOptions={[{ value: 'phone_charge', label: 'Phone Charge (Landline)' }]}
+          savedMethods={savedPaymentMethods}
+          defaultAmount={15}
           onCreated={load}
         />
       )}
@@ -996,54 +1507,443 @@ export default function StudentTuitionPage() {
         </div>
       )}
 
-      {/* Registration Fee — one-time flat fee, tracked separately from tuition plans */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-2.5">
-          <Receipt size={16} className="text-slate-400 shrink-0" />
-          <span className="text-sm font-medium text-slate-700">Registration Fee</span>
-          {student.registration_fee_status === 'pending' && (
-            <span className="text-sm text-amber-600 font-medium">{formatCurrency(Number(student.registration_fee_amount ?? 0))} · Pending</span>
-          )}
-          {student.registration_fee_status === 'paid' && (
-            <span className="text-sm text-green-600 font-medium">
-              {formatCurrency(Number(student.registration_fee_amount ?? 0))} · Paid
-              {student.registration_fee_paid_date && ` on ${new Date(student.registration_fee_paid_date + 'T00:00:00').toLocaleDateString()}`}
+      {/* Registration Fee — one-time flat fee tracked on the student (not tied
+          to a plan/year), rose-accented throughout so it's never mistaken
+          for a tuition or building fund payment. Balance/history is derived
+          from its own 'registration_fee' payment rows, same as building fund. */}
+      {(() => {
+        const regBal = regFeeBalances(student, payments)
+        const fullyForgiven = regBal.regFeePayments.length > 0 && regBal.balance <= 0.005 &&
+          regBal.regFeePayments.filter(p => COUNTS_AS_PAID.includes(p.status)).every(p => p.status === 'forgiven')
+        return (
+          <div className="bg-white rounded-xl shadow-sm border border-rose-100 overflow-hidden">
+            <div className="flex items-center justify-between flex-wrap gap-3 p-4">
+              <div className="flex items-center gap-2.5">
+                <Receipt size={16} className="text-rose-400 shrink-0" />
+                <span className="text-sm font-medium text-slate-700">Registration Fee</span>
+                {!student.registration_fee_status && (
+                  <span className="text-sm text-slate-400">Not on file</span>
+                )}
+                {student.registration_fee_status && (
+                  <span className="text-sm text-slate-500">
+                    {formatCurrency(regBal.charge)} charge · Paid <span className="text-green-600 font-medium">{formatCurrency(regBal.paid)}</span>
+                    {' · '}
+                    {fullyForgiven ? (
+                      <span className="text-purple-600 font-medium">Forgiven</span>
+                    ) : regBal.balance > 0.005 ? (
+                      <span className="text-red-600 font-medium">{formatCurrency(regBal.balance)} remaining</span>
+                    ) : (
+                      <span className="text-green-600 font-medium">Paid in Full</span>
+                    )}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {!student.registration_fee_status && (
+                  <button onClick={addRegistrationFee}
+                    className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition-colors">
+                    <Plus size={13} /> Add $250 Registration Fee
+                  </button>
+                )}
+                {student.registration_fee_status && (
+                  <button onClick={() => openAddPayment(REG_FEE_KEY)}
+                    className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition-colors">
+                    <Plus size={13} /> Add Payment
+                  </button>
+                )}
+                {student.registration_fee_status && !fullyForgiven && regBal.balance > 0.005 && (
+                  <button onClick={() => forgiveRegistrationFee(regBal.balance)}
+                    className="text-xs text-slate-400 hover:text-slate-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
+                    Forgive Entire Registration Fee
+                  </button>
+                )}
+                {student.registration_fee_status && regBal.regFeePayments.length === 0 && (
+                  <button onClick={removeRegistrationFee}
+                    className="text-xs text-slate-400 hover:text-slate-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {student.registration_fee_status && (
+              <div className="px-4 pb-4">
+                {showAddPayment === REG_FEE_KEY && (
+                  <PaymentForm
+                    form={paymentForm}
+                    setForm={setPaymentForm}
+                    onSubmit={savePayment}
+                    onCancel={() => { setShowAddPayment(null); setEditingPayment(null) }}
+                    editing={!!editingPayment}
+                    saving={savingPayment}
+                    remainingBalance={regBal.balance}
+                    lockedType="registration_fee"
+                  />
+                )}
+
+                {regBal.regFeePayments.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-1">No payments recorded yet.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-100">
+                          <th className="pb-2 text-left text-xs font-medium text-slate-400">Paid Date</th>
+                          <th className="pb-2 text-right text-xs font-medium text-slate-400">Amount</th>
+                          <th className="pb-2 text-left text-xs font-medium text-slate-400 pl-3">Status</th>
+                          <th className="pb-2 text-left text-xs font-medium text-slate-400 hidden md:table-cell">Method</th>
+                          <th className="pb-2 w-14" />
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {regBal.regFeePayments.map(pay => (
+                          <tr key={pay.id} className="hover:bg-slate-50">
+                            <td className="py-2 text-slate-600">
+                              {pay.payment_date ? new Date(pay.payment_date).toLocaleDateString() : <span className="text-slate-300">—</span>}
+                            </td>
+                            <td className="py-2 text-right font-medium text-slate-900">{formatCurrency(Number(pay.amount))}</td>
+                            <td className="py-2 pl-3">
+                              <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${statusBadge(pay.status)}`}>
+                                {planStatusIcon(pay.status)}
+                                {statusLabel(pay.status)}
+                              </span>
+                            </td>
+                            <td className="py-2 text-xs text-slate-400 hidden md:table-cell">
+                              {paymentMethodLabel(pay.payment_method)}
+                              {pay.transaction_id && <span className="ml-1 text-slate-300">#{pay.transaction_id}</span>}
+                            </td>
+                            <td className="py-2">
+                              <div className="flex items-center gap-1 justify-end">
+                                {COUNTS_AS_PAID.includes(pay.status) && (
+                                  <>
+                                    <button onClick={() => printRegFeeReceipt(pay)} className="p-1 text-slate-300 hover:text-rose-600 transition-colors" title="View receipt">
+                                      <Receipt size={13} />
+                                    </button>
+                                    <button onClick={() => emailRegFeeReceipt(pay)} className="p-1 text-slate-300 hover:text-rose-600 transition-colors" title="Email receipt">
+                                      <Mail size={13} />
+                                    </button>
+                                  </>
+                                )}
+                                <button onClick={() => openEditPayment(pay)} className="p-1 text-slate-300 hover:text-rose-600 transition-colors" title="Edit">
+                                  <Edit2 size={13} />
+                                </button>
+                                <button onClick={() => deletePayment(pay.id)} className="p-1 text-slate-300 hover:text-red-600 transition-colors" title="Delete">
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* Phone Charge — a plan-independent recurring fee (same shape as
+          Registration Fee) but billed automatically via a real Sola
+          recurring schedule instead of one-time staff-recorded payments —
+          "Set Up" starts the card charging itself every month on Sola's own
+          clock until "Stop" cancels it (or the student is marked graduated,
+          which cancels it automatically — see StudentEditForm). Sky-accented
+          so it's never mistaken for the other fee types. */}
+      {(() => {
+        const phoneBal = phoneChargeTotals(payments)
+        const activeSchedule = phoneSchedules.find(s => s.status === 'active')
+        return (
+          <div className="bg-white rounded-xl shadow-sm border border-sky-100 overflow-hidden">
+            <div className="flex items-center justify-between flex-wrap gap-3 p-4">
+              <div className="flex items-center gap-2.5">
+                <Phone size={16} className="text-sky-400 shrink-0" />
+                <span className="text-sm font-medium text-slate-700">Phone Charge (Landline)</span>
+                {activeSchedule ? (
+                  <span className="text-sm text-slate-500">
+                    {scheduleCadenceLabel(activeSchedule)} since {new Date(activeSchedule.start_date + 'T00:00:00').toLocaleDateString()}
+                    {' · '}
+                    <span className="text-green-600 font-medium">Active</span>
+                  </span>
+                ) : phoneSchedules.length > 0 ? (
+                  <span className="text-sm text-slate-500">
+                    Stopped · {formatCurrency(phoneBal.paid)} collected total
+                  </span>
+                ) : (
+                  <span className="text-sm text-slate-400">Not set up</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {activeSchedule ? (
+                  <button onClick={() => stopPhoneCharge(activeSchedule.id)}
+                    className="flex items-center gap-1 text-xs text-slate-400 hover:text-red-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-red-50 transition-colors">
+                    <Ban size={13} /> Stop Recurring Charge
+                  </button>
+                ) : (
+                  <button onClick={() => setShowPhoneRecurringModal(true)}
+                    className="flex items-center gap-1 text-xs text-sky-600 hover:text-sky-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-sky-50 transition-colors">
+                    <Repeat size={13} /> Set Up Recurring $15/mo
+                  </button>
+                )}
+                <button onClick={() => openAddPayment(PHONE_CHARGE_KEY)}
+                  className="flex items-center gap-1 text-xs text-sky-600 hover:text-sky-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-sky-50 transition-colors">
+                  <Plus size={13} /> Add Payment
+                </button>
+              </div>
+            </div>
+
+            <div className="px-4 pb-4">
+              {showAddPayment === PHONE_CHARGE_KEY && (
+                <PaymentForm
+                  form={paymentForm}
+                  setForm={setPaymentForm}
+                  onSubmit={savePayment}
+                  onCancel={() => { setShowAddPayment(null); setEditingPayment(null) }}
+                  editing={!!editingPayment}
+                  saving={savingPayment}
+                  lockedType="phone_charge"
+                />
+              )}
+
+              {phoneBal.phoneChargePayments.length === 0 ? (
+                <p className="text-xs text-slate-400 py-1">No charges recorded yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100">
+                        <th className="pb-2 text-left text-xs font-medium text-slate-400">Paid Date</th>
+                        <th className="pb-2 text-right text-xs font-medium text-slate-400">Amount</th>
+                        <th className="pb-2 text-left text-xs font-medium text-slate-400 pl-3">Status</th>
+                        <th className="pb-2 text-left text-xs font-medium text-slate-400 hidden md:table-cell">Method</th>
+                        <th className="pb-2 w-14" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {phoneBal.phoneChargePayments.map(pay => (
+                        <tr key={pay.id} className="hover:bg-slate-50">
+                          <td className="py-2 text-slate-600">
+                            {pay.payment_date ? new Date(pay.payment_date).toLocaleDateString() : <span className="text-slate-300">—</span>}
+                          </td>
+                          <td className="py-2 text-right font-medium text-slate-900">{formatCurrency(Number(pay.amount))}</td>
+                          <td className="py-2 pl-3">
+                            <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${statusBadge(pay.status)}`}>
+                              {planStatusIcon(pay.status)}
+                              {statusLabel(pay.status)}
+                            </span>
+                          </td>
+                          <td className="py-2 text-xs text-slate-400 hidden md:table-cell">
+                            {paymentMethodLabel(pay.payment_method)}
+                            {pay.transaction_id && <span className="ml-1 text-slate-300">#{pay.transaction_id}</span>}
+                          </td>
+                          <td className="py-2">
+                            <div className="flex items-center gap-1 justify-end">
+                              {COUNTS_AS_PAID.includes(pay.status) && (
+                                <>
+                                  <button onClick={() => printPhoneChargeReceipt(pay)} className="p-1 text-slate-300 hover:text-sky-600 transition-colors" title="View receipt">
+                                    <Receipt size={13} />
+                                  </button>
+                                  <button onClick={() => emailPhoneChargeReceipt(pay)} className="p-1 text-slate-300 hover:text-sky-600 transition-colors" title="Email receipt">
+                                    <Mail size={13} />
+                                  </button>
+                                </>
+                              )}
+                              <button onClick={() => openEditPayment(pay, PHONE_CHARGE_KEY)} className="p-1 text-slate-300 hover:text-sky-600 transition-colors" title="Edit">
+                                <Edit2 size={13} />
+                              </button>
+                              <button onClick={() => deletePayment(pay.id)} className="p-1 text-slate-300 hover:text-red-600 transition-colors" title="Delete">
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Building Fund — a per-plan charge (unlike registration fee) but
+          given the same prominent, dedicated panel: amber-accented so it's
+          never mistaken for tuition (blue) or registration fee (rose).
+          Forgiving it here just sets the same building_fund_waived flag the
+          tuition statement PDF already respects — nothing about what prints
+          on the statement changes, this only makes it easier to manage. */}
+      {currentPlan && (bfBal!.buildingFund > 0 || currentPlan.building_fund_waived || bfPayments.length > 0) && (
+        <div className="bg-white rounded-xl shadow-sm border border-amber-100 overflow-hidden">
+          <div className="flex items-center justify-between flex-wrap gap-3 p-4">
+            <div className="flex items-center gap-2.5">
+              <Receipt size={16} className="text-amber-400 shrink-0" />
+              <span className="text-sm font-medium text-slate-700">Building Fund</span>
+              <span className="text-xs text-slate-400">({currentPlan.academic_year})</span>
+              <span className="text-sm text-slate-500 flex items-center gap-1.5">
+                {editingBFAmount ? (
+                  <>
+                    <input type="number" step="0.01" min="0" autoFocus value={bfAmountInput}
+                      onChange={e => setBfAmountInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveBuildingFundAmount(currentPlan.id) }}
+                      className="w-24 border border-amber-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                    <button onClick={() => saveBuildingFundAmount(currentPlan.id)} className="text-amber-600 hover:text-amber-700"><Check size={15} /></button>
+                    <button onClick={() => setEditingBFAmount(false)} className="text-slate-400 hover:text-slate-600"><X size={15} /></button>
+                  </>
+                ) : (
+                  <>
+                    {formatCurrency(bfBal!.buildingFund)} charge
+                    <button onClick={() => { setBfAmountInput(String(currentPlan.building_fund_amount ?? 0)); setEditingBFAmount(true) }}
+                      className="text-slate-300 hover:text-amber-600" title="Alter amount">
+                      <Edit2 size={12} />
+                    </button>
+                  </>
+                )}
+                {' · '}Paid <span className="text-green-600 font-medium">{formatCurrency(bfBal!.buildingFundPaid)}</span>
+                {' · '}
+                {bfFullyForgiven ? (
+                  <span className="text-purple-600 font-medium">Forgiven</span>
+                ) : bfBal!.buildingFundBalance > 0.005 ? (
+                  <span className="text-red-600 font-medium">{formatCurrency(bfBal!.buildingFundBalance)} remaining</span>
+                ) : (
+                  <span className="text-green-600 font-medium">Paid in Full</span>
+                )}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => openAddPayment(bfKey(currentPlan.id), { payment_type: 'building_fund' })}
+                className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-amber-50 transition-colors">
+                <Plus size={13} /> Add Payment
+              </button>
+              <button onClick={() => toggleBuildingFundWaived(currentPlan.id, !currentPlan.building_fund_waived)}
+                className="text-xs text-slate-400 hover:text-slate-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
+                {currentPlan.building_fund_waived ? 'Un-forgive' : 'Forgive Entire Building Fund'}
+              </button>
+            </div>
+          </div>
+
+          <div className="px-4 pb-4">
+            {showAddPayment === bfKey(currentPlan.id) && (
+              <PaymentForm
+                form={paymentForm}
+                setForm={setPaymentForm}
+                onSubmit={savePayment}
+                onCancel={() => { setShowAddPayment(null); setEditingPayment(null) }}
+                editing={!!editingPayment}
+                saving={savingPayment}
+                remainingBalance={bfBal!.buildingFundBalance}
+                lockedType="building_fund"
+              />
+            )}
+
+            {bfPayments.length === 0 ? (
+              <p className="text-xs text-slate-400 py-1">No payments recorded yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100">
+                      <th className="pb-2 text-left text-xs font-medium text-slate-400">Paid Date</th>
+                      <th className="pb-2 text-right text-xs font-medium text-slate-400">Amount</th>
+                      <th className="pb-2 text-left text-xs font-medium text-slate-400 pl-3">Status</th>
+                      <th className="pb-2 text-left text-xs font-medium text-slate-400 hidden md:table-cell">Method</th>
+                      <th className="pb-2 w-14" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {bfPayments.map(pay => (
+                      <tr key={pay.id} className="hover:bg-slate-50">
+                        <td className="py-2 text-slate-600">
+                          {pay.payment_date ? new Date(pay.payment_date).toLocaleDateString() : <span className="text-slate-300">—</span>}
+                        </td>
+                        <td className="py-2 text-right font-medium text-slate-900">{formatCurrency(Number(pay.amount))}</td>
+                        <td className="py-2 pl-3">
+                          <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${statusBadge(pay.status)}`}>
+                            {planStatusIcon(pay.status)}
+                            {statusLabel(pay.status)}
+                          </span>
+                        </td>
+                        <td className="py-2 text-xs text-slate-400 hidden md:table-cell">
+                          {paymentMethodLabel(pay.payment_method)}
+                          {pay.transaction_id && <span className="ml-1 text-slate-300">#{pay.transaction_id}</span>}
+                        </td>
+                        <td className="py-2">
+                          <div className="flex items-center gap-1 justify-end">
+                            {COUNTS_AS_PAID.includes(pay.status) && (
+                              <>
+                                <button onClick={() => printReceipt(currentPlan, pay)} className="p-1 text-slate-300 hover:text-amber-600 transition-colors" title="View receipt">
+                                  <Receipt size={13} />
+                                </button>
+                                <button onClick={() => emailReceipt(currentPlan, pay)} className="p-1 text-slate-300 hover:text-amber-600 transition-colors" title="Email receipt">
+                                  <Mail size={13} />
+                                </button>
+                              </>
+                            )}
+                            <button onClick={() => openEditPayment(pay, bfKey(currentPlan.id))} className="p-1 text-slate-300 hover:text-amber-600 transition-colors" title="Edit">
+                              <Edit2 size={13} />
+                            </button>
+                            <button onClick={() => deletePayment(pay.id)} className="p-1 text-slate-300 hover:text-red-600 transition-colors" title="Delete">
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Donations — from this student's linked parent(s), kept entirely
+          separate from tuition/building fund/registration fee: a different
+          table, a different color (emerald, vs. the blue/amber/rose used
+          above), and never folded into any balance figure on this page. */}
+      {parentDonations.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-emerald-100 overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-emerald-100 bg-emerald-50">
+            <div className="flex items-center gap-2">
+              <Heart size={15} className="text-emerald-600" />
+              <p className="text-sm font-semibold text-emerald-900">Donations</p>
+              <span className="text-xs text-emerald-600">from this student&apos;s parent(s) — separate from tuition</span>
+            </div>
+            <span className="text-sm font-bold text-emerald-700">
+              {formatCurrency(parentDonations.reduce((s, d) => s + Number(d.amount), 0))} total
             </span>
-          )}
-          {student.registration_fee_status === 'waived' && (
-            <span className="text-sm text-slate-400 font-medium">Waived</span>
-          )}
-          {!student.registration_fee_status && (
-            <span className="text-sm text-slate-400">Not on file</span>
-          )}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-slate-400">
+                  <th className="text-left px-5 py-2 font-medium text-xs">Donor</th>
+                  <th className="text-left px-5 py-2 font-medium text-xs">Date</th>
+                  <th className="text-left px-5 py-2 font-medium text-xs">Category</th>
+                  <th className="text-right px-5 py-2 font-medium text-xs">Amount</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {parentDonations.map(d => (
+                  <tr key={d.id} className="hover:bg-emerald-50/50">
+                    <td className="px-5 py-2">
+                      {d.donors ? (
+                        <Link href={`/admin/donors/${d.donor_id}`} className="text-emerald-700 hover:text-emerald-800 font-medium">{d.donors.name}</Link>
+                      ) : '—'}
+                    </td>
+                    <td className="px-5 py-2 text-slate-600">{new Date(d.donation_date + 'T00:00:00').toLocaleDateString()}</td>
+                    <td className="px-5 py-2 text-slate-500">{d.events?.name ?? donationCategoryLabel(d.category) ?? '—'}</td>
+                    <td className="px-5 py-2 text-right font-semibold text-emerald-700">{formatCurrency(Number(d.amount))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {!student.registration_fee_status && (
-            <button onClick={addRegistrationFee}
-              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-blue-50 transition-colors">
-              <Plus size={13} /> Add $250 Registration Fee
-            </button>
-          )}
-          {student.registration_fee_status === 'pending' && (
-            <>
-              <button onClick={markRegistrationFeePaid}
-                className="flex items-center gap-1 text-xs text-green-600 hover:text-green-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-green-50 transition-colors">
-                <CheckCircle size={13} /> Mark Paid
-              </button>
-              <button onClick={waiveRegistrationFee}
-                className="text-xs text-slate-500 hover:text-slate-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
-                Waive
-              </button>
-            </>
-          )}
-          {(student.registration_fee_status === 'paid' || student.registration_fee_status === 'waived') && (
-            <button onClick={resetRegistrationFee}
-              className="text-xs text-slate-400 hover:text-slate-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
-              Undo
-            </button>
-          )}
-        </div>
-      </div>
+      )}
+
+      <TuitionDocumentsPanel studentId={studentId} />
 
       <SentLettersPanel studentId={studentId} />
 
@@ -1415,6 +2315,7 @@ export default function StudentTuitionPage() {
             const bal          = planBalances(plan, planPayments)
             const isExpanded   = expandedPlan === plan.id
             const rs           = reminderStatus(plan.reminder_date)
+            const backfillMonths = unpaidMonths(plan, planPayments)
 
             // Yearly prorated info for display
             const planProrated = proratedInfo(
@@ -1555,6 +2456,38 @@ export default function StudentTuitionPage() {
                     {/* Yearly overview (shown when yearly_amount is set) */}
                     <YearlyOverview plan={plan} payments={planPayments.filter(p => (p.payment_type ?? 'tuition') === 'tuition')} />
 
+                    {/* Backfill — past/unpaid months for yearly-billed plans */}
+                    {backfillMonths.length > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
+                        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-amber-200 bg-white">
+                          <CalendarCheck size={14} className="text-amber-600" />
+                          <p className="text-sm font-semibold text-amber-900">Unpaid Months</p>
+                          <span className="text-xs text-amber-600 ml-auto">Record a backdated payment against any month below</span>
+                        </div>
+                        <div className="divide-y divide-amber-100">
+                          {backfillMonths.map(m => (
+                            <div key={m.monthKey} className="flex items-center justify-between px-4 py-2 gap-3">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${m.isPast ? 'bg-red-400' : 'bg-amber-300'}`} />
+                                <span className="text-sm text-slate-700 truncate">{m.label}</span>
+                                <span className="text-xs text-slate-400">
+                                  {m.paidSoFar > 0
+                                    ? `${formatCurrency(m.remaining)} remaining of ${formatCurrency(m.amount)}`
+                                    : `${formatCurrency(m.amount)} due`}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() => openAddPayment(plan.id, { payment_type: 'tuition', period_month: m.monthKey, amount: m.remaining.toFixed(2) })}
+                                className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium px-2 py-1 rounded-lg hover:bg-blue-100 transition-colors flex-shrink-0"
+                              >
+                                <Plus size={12} /> Record Payment
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Payment records */}
                     <div>
                       <div className="flex items-center justify-between mb-3">
@@ -1570,85 +2503,16 @@ export default function StudentTuitionPage() {
 
                       {/* Add/edit payment form */}
                       {showAddPayment === plan.id && (
-                        <div className="bg-slate-50 rounded-lg p-4 mb-3 border border-slate-200">
-                          <div className="flex items-center justify-between mb-3">
-                            <p className="text-sm font-medium text-slate-700">{editingPayment ? 'Edit Payment' : 'Record Payment'}</p>
-                            <button onClick={() => { setShowAddPayment(null); setEditingPayment(null) }} className="text-slate-400 hover:text-slate-600">
-                              <X size={15} />
-                            </button>
-                          </div>
-                          <form onSubmit={savePayment} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div>
-                              <label className="block text-xs font-medium text-slate-500 mb-1">Amount</label>
-                              <input type="number" step="0.01" min="0" value={paymentForm.amount}
-                                onChange={e => setPaymentForm(f => ({ ...f, amount: e.target.value }))}
-                                placeholder={formatCurrency(Number(plan.payment_amount))}
-                                className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-slate-500 mb-1">Status</label>
-                              <select value={paymentForm.status} onChange={e => setPaymentForm(f => ({ ...f, status: e.target.value }))}
-                                className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                {STATUSES.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-slate-500 mb-1">Due Date</label>
-                              <input type="date" value={paymentForm.due_date}
-                                onChange={e => setPaymentForm(f => ({ ...f, due_date: e.target.value }))}
-                                className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-slate-500 mb-1">Payment Date</label>
-                              <input type="date" value={paymentForm.payment_date}
-                                onChange={e => setPaymentForm(f => ({ ...f, payment_date: e.target.value }))}
-                                className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-slate-500 mb-1">Payment Method</label>
-                              <select value={paymentForm.payment_method} onChange={e => setPaymentForm(f => ({ ...f, payment_method: e.target.value }))}
-                                className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <option value="">— select —</option>
-                                {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-slate-500 mb-1">Payment Type</label>
-                              <select value={paymentForm.payment_type} onChange={e => setPaymentForm(f => ({ ...f, payment_type: e.target.value }))}
-                                className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <option value="tuition">Tuition Payment</option>
-                                <option value="building_fund">Building Fund</option>
-                                <option value="donation">Donation</option>
-                              </select>
-                              {paymentForm.payment_type === 'donation' && (
-                                <p className="text-xs text-slate-400 mt-1">Recorded here, but won&apos;t count toward tuition or building fund balance.</p>
-                              )}
-                              {paymentForm.payment_type === 'building_fund' && (
-                                <p className="text-xs text-slate-400 mt-1">Counts toward the building fund balance, not tuition.</p>
-                              )}
-                            </div>
-                            <div>
-                              <label className="block text-xs font-medium text-slate-500 mb-1">Check / Transaction #</label>
-                              <input value={paymentForm.transaction_id} onChange={e => setPaymentForm(f => ({ ...f, transaction_id: e.target.value }))}
-                                className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                            </div>
-                            <div className="sm:col-span-2">
-                              <label className="block text-xs font-medium text-slate-500 mb-1">Notes</label>
-                              <input value={paymentForm.notes} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))}
-                                className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                            </div>
-                            <div className="sm:col-span-2 flex gap-2">
-                              <button type="submit" disabled={savingPayment}
-                                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors">
-                                {savingPayment ? 'Saving…' : editingPayment ? 'Save' : 'Record Payment'}
-                              </button>
-                              <button type="button" onClick={() => { setShowAddPayment(null); setEditingPayment(null) }}
-                                className="px-3 py-1.5 rounded-lg text-xs text-slate-600 border border-slate-200 hover:bg-slate-100 transition-colors">
-                                Cancel
-                              </button>
-                            </div>
-                          </form>
-                        </div>
+                        <PaymentForm
+                          form={paymentForm}
+                          setForm={setPaymentForm}
+                          onSubmit={savePayment}
+                          onCancel={() => { setShowAddPayment(null); setEditingPayment(null) }}
+                          editing={!!editingPayment}
+                          saving={savingPayment}
+                          remainingBalance={paymentForm.payment_type === 'building_fund' ? bal.buildingFundBalance : bal.tuitionBalance}
+                          monthOptions={paymentForm.payment_type === 'tuition' ? backfillMonths : undefined}
+                        />
                       )}
 
                       {planPayments.length === 0 ? (
@@ -1674,13 +2538,18 @@ export default function StudentTuitionPage() {
                                   </td>
                                   <td className="py-2 text-slate-600">
                                     {pay.payment_date ? new Date(pay.payment_date).toLocaleDateString() : <span className="text-slate-300">—</span>}
+                                    {pay.period_month && (
+                                      <span className="block text-xs text-blue-500">
+                                        For {new Date(pay.period_month + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                                      </span>
+                                    )}
                                   </td>
                                   <td className="py-2 text-right font-medium text-slate-900">{formatCurrency(Number(pay.amount))}</td>
                                   <td className="py-2 pl-3">
                                     <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium capitalize ${statusBadge(pay.status)}`}>
+                                      <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${statusBadge(pay.status)}`}>
                                         {planStatusIcon(pay.status)}
-                                        {pay.status}
+                                        {statusLabel(pay.status)}
                                       </span>
                                       {pay.payment_type === 'donation' && (
                                         <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700">Donation</span>
@@ -1696,7 +2565,7 @@ export default function StudentTuitionPage() {
                                   </td>
                                   <td className="py-2">
                                     <div className="flex items-center gap-1 justify-end">
-                                      {pay.status === 'paid' && (
+                                      {COUNTS_AS_PAID.includes(pay.status) && (
                                         <>
                                           <button onClick={() => printReceipt(plan, pay)} className="p-1 text-slate-300 hover:text-blue-600 transition-colors" title="View receipt">
                                             <Receipt size={13} />
@@ -1721,6 +2590,8 @@ export default function StudentTuitionPage() {
                         </div>
                       )}
                     </div>
+
+                    <TuitionDocumentsPanel studentId={studentId} tuitionPlanId={plan.id} academicYear={plan.academic_year} />
                   </div>
                 )}
               </div>
@@ -1737,6 +2608,13 @@ export default function StudentTuitionPage() {
           defaultBody={emailModal.defaultBody}
           buildAttachment={emailModal.buildAttachment}
           logContext={{ studentId }}
+        />
+      )}
+      {pendingPrint && (
+        <PrintNoteModal
+          title={pendingPrint.title}
+          onConfirm={confirmPendingPrint}
+          onClose={() => setPendingPrint(null)}
         />
       )}
     </div>

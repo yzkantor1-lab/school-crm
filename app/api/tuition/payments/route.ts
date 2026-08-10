@@ -21,7 +21,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from('tuition_payments')
       .select('id,tuition_plan_id,amount,status,payment_type,payment_date')
-      .eq('status', 'paid')
+      .in('status', ['paid', 'partial', 'forgiven'])
       .in('payment_type', ['tuition', 'building_fund'])
       .gt('id', cursor)
       .order('id')

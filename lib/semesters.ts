@@ -166,3 +166,42 @@ export function studentDisplayStatus(status: string | null | undefined, cameSeme
   if (status === 'active' && isSemesterUpcoming(cameSemester)) return 'pending'
   return status || 'unknown'
 }
+
+export const GRADE_LEVELS = ['First Year', 'Second Year', 'Third Year', 'Fourth Year']
+
+// The school year (index into SCHOOL_YEAR_SEMESTERS) we're currently in, or
+// most recently started — the last year whose Semester 1 has already begun.
+// Falls back to index 0 if today is before the earliest year on file.
+function schoolYearIndexForDate(dateStr: string): number {
+  let idx = 0
+  for (let i = 0; i < SCHOOL_YEAR_SEMESTERS.length; i++) {
+    if (SCHOOL_YEAR_SEMESTERS[i].semesters[0].startDate <= dateStr) idx = i
+  }
+  return idx
+}
+
+// came_semester's academic-year prefix ("2025–2026 Semester 3" → index of
+// the "2025–2026" group), or null for a blank/legacy value we can't place.
+function schoolYearIndexForSemester(cameSemester: string | null | undefined): number | null {
+  if (!cameSemester) return null
+  const idx = SCHOOL_YEAR_SEMESTERS.findIndex(g => cameSemester.startsWith(g.year))
+  return idx === -1 ? null : idx
+}
+
+// The grade level stored on the student record is what they STARTED at
+// (set once, alongside came_semester) — this computes what grade they're
+// actually in NOW by advancing one step per academic year that's begun
+// since then, same "live-computed, never stored, no cron job" pattern as
+// isSemesterUpcoming/studentDisplayStatus. Caps at the last grade level —
+// a Fourth Year student doesn't advance further; graduating them is a
+// separate, manual staff action (Status → Graduated).
+export function currentGradeLevel(startingGradeLevel: string | null | undefined, cameSemester: string | null | undefined): string | null {
+  if (!startingGradeLevel) return null
+  const startIdx = GRADE_LEVELS.indexOf(startingGradeLevel)
+  if (startIdx === -1) return startingGradeLevel // legacy/free-text value — leave it alone rather than guess
+  const startYearIdx = schoolYearIndexForSemester(cameSemester)
+  if (startYearIdx === null) return startingGradeLevel // no came_semester on file — nothing to compute elapsed years from
+  const currentYearIdx = schoolYearIndexForDate(new Date().toISOString().slice(0, 10))
+  const yearsElapsed = Math.max(0, currentYearIdx - startYearIdx)
+  return GRADE_LEVELS[Math.min(GRADE_LEVELS.length - 1, startIdx + yearsElapsed)]
+}

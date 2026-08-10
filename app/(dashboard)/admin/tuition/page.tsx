@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Search, GraduationCap, Plus, ChevronRight, Filter, X, UserPlus, BookOpen, CalendarDays, Users, AlertCircle } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
 import ExportButton from '@/components/ExportButton'
-import { SCHOOL_YEAR_SEMESTERS } from '@/lib/semesters'
+import { SCHOOL_YEAR_SEMESTERS, currentGradeLevel } from '@/lib/semesters'
 
 // There's no per-installment schedule in the data — payments are only ever
 // logged once received, never as a pending/due row — so "outstanding by
@@ -844,6 +844,7 @@ export default function TuitionPage() {
 function TuitionTable({ students }: { students: StudentWithTuition[] }) {
   return (
     <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="overflow-x-auto">
       <table className="w-full">
         <thead className="bg-slate-50 border-b border-slate-100">
           <tr>
@@ -868,7 +869,7 @@ function TuitionTable({ students }: { students: StudentWithTuition[] }) {
                       {[s.first_name, s.last_name].filter(Boolean).join(' ') || '—'}
                     </p>
                     <p className="text-xs text-slate-400">
-                      {s.grade_level && `${s.grade_level}`}{s.student_id && ` · ${s.student_id}`}
+                      {currentGradeLevel(s.grade_level, s.came_semester)}{s.student_id && ` · ${s.student_id}`}
                     </p>
                   </div>
                 </Link>
@@ -920,6 +921,7 @@ function TuitionTable({ students }: { students: StudentWithTuition[] }) {
           ))}
         </tbody>
       </table>
+      </div>
       {students.length === 0 && (
         <div className="text-center py-12 text-slate-400 text-sm">No students found.</div>
       )}

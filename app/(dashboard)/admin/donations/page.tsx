@@ -2,15 +2,29 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
-import { DollarSign, Calendar, CreditCard, FileText, UserPlus, X } from 'lucide-react'
+import { DollarSign, Calendar, CreditCard, FileText, UserPlus, X, AlertTriangle, PartyPopper } from 'lucide-react'
 
 type Donor = { id: string; name: string; email: string | null }
+type StudentParent = { id: string; first_name: string; last_name: string; father_name: string | null; mother_name: string | null }
+type EventOption = { id: string; name: string }
 type Donation = {
   id: string; donor_id: string; amount: number; donation_method: string; donation_date: string
-  purpose: string; notes: string | null; archived: boolean
+  purpose: string; notes: string | null; archived: boolean; category: string | null; source: string
   donors: { name: string }
+  events: { name: string } | null
+}
+
+const DONATION_CATEGORIES = [
+  { value: 'one_time', label: 'One-Time Donation' },
+  { value: 'monthly_recurring', label: 'Monthly Recurring Donation' },
+  { value: 'event', label: 'Event Donation' },
+]
+
+function normalizeName(s: string) {
+  return s.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 export default function DonationsPage() {
@@ -23,6 +37,8 @@ export default function DonationsPage() {
   const [donationPurposes, setDonationPurposes] = useState<string[]>(['General Fund'])
   const [donorCategories, setDonorCategories] = useState<string[]>(['General'])
   const [relationships, setRelationships] = useState<string[]>(['Other'])
+  const [events, setEvents] = useState<EventOption[]>([])
+  const [studentParents, setStudentParents] = useState<StudentParent[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [selectedDonor, setSelectedDonor] = useState<Donor | null>(null)
@@ -32,8 +48,27 @@ export default function DonationsPage() {
   const [success, setSuccess] = useState(false)
   const [newDonorData, setNewDonorData] = useState({ name: '', email: '', phone_number: '', address: '', category: '', relationship: '' })
   const [formData, setFormData] = useState({
-    amount: '', donation_method: '', donation_date: new Date().toISOString().split('T')[0], purpose: '', notes: ''
+    amount: '', donation_method: '', donation_date: new Date().toISOString().split('T')[0], purpose: '', notes: '',
+    category: 'one_time', event_id: '',
   })
+
+  // Warn before creating a possible duplicate contact — matches by exact
+  // normalized name against existing donors, or against a student's parent
+  // fields (a common case: a parent's first donation, but they're already a
+  // tuition contact). Never auto-links — just surfaces the option. Cheap
+  // enough to compute inline each render rather than memoize.
+  function findNameMatch() {
+    const q = normalizeName(newDonorData.name)
+    if (q.length < 3) return null
+    const existingDonor = donors.find(d => normalizeName(d.name) === q)
+    if (existingDonor) return { kind: 'donor' as const, donor: existingDonor }
+    for (const s of studentParents) {
+      if (s.father_name && normalizeName(s.father_name) === q) return { kind: 'parent' as const, student: s, parentName: s.father_name }
+      if (s.mother_name && normalizeName(s.mother_name) === q) return { kind: 'parent' as const, student: s, parentName: s.mother_name }
+    }
+    return null
+  }
+  const nameMatch = findNameMatch()
 
   const fetchSettings = useCallback(async () => {
     const { data } = await supabase.from('donor_settings').select('*').limit(1).maybeSingle()
@@ -53,24 +88,37 @@ export default function DonationsPage() {
     setDonors(data || [])
   }, [supabase])
 
+  const fetchEvents = useCallback(async () => {
+    const { data } = await supabase.from('events').select('id,name').order('event_date', { ascending: false })
+    setEvents(data ?? [])
+  }, [supabase])
+
+  const fetchStudentParents = useCallback(async () => {
+    const { data } = await supabase.from('students').select('id,first_name,last_name,father_name,mother_name')
+    setStudentParents((data ?? []) as StudentParent[])
+  }, [supabase])
+
   const fetchDonations = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase.from('donations').select('*, donors(name)').eq('archived', false).order('donation_date', { ascending: false }).limit(50)
-    setDonations(data || [])
+    const { data } = await supabase.from('donations').select('*, donors(name), events(name)').eq('archived', false).order('donation_date', { ascending: false }).limit(50)
+    setDonations((data ?? []) as unknown as Donation[])
     setLoading(false)
   }, [supabase])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
-  useEffect(() => { fetchSettings(); fetchDonors(); fetchDonations() }, [fetchSettings, fetchDonors, fetchDonations])
+  useEffect(() => { fetchSettings(); fetchDonors(); fetchDonations(); fetchEvents(); fetchStudentParents() }, [fetchSettings, fetchDonors, fetchDonations, fetchEvents, fetchStudentParents])
 
   async function handleAddNewDonor(e: React.FormEvent) {
     e.preventDefault()
+    const linkedStudentId = nameMatch?.kind === 'parent' ? nameMatch.student.id : null
     const { data, error } = await supabase.from('donors').insert([{
       name: newDonorData.name, email: newDonorData.email || null, phone_number: newDonorData.phone_number || null,
-      address: newDonorData.address || null, category: newDonorData.category, relationship: newDonorData.relationship,
+      address: newDonorData.address || null, category: newDonorData.category,
+      relationship: linkedStudentId ? 'Parent' : newDonorData.relationship,
     }]).select().single()
     if (error) { alert('Error adding donor.'); return }
     if (data) {
+      if (linkedStudentId) await supabase.from('donor_students').upsert([{ donor_id: data.id, student_id: linkedStudentId }], { onConflict: 'donor_id,student_id' })
       setSelectedDonor(data); setSearchTerm(data.name); setShowNewDonorForm(false)
       setNewDonorData({ name: '', email: '', phone_number: '', address: '', category: donorCategories[0] || '', relationship: relationships[0] || '' })
       fetchDonors()
@@ -80,15 +128,17 @@ export default function DonationsPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!selectedDonor) { alert('Please select a donor'); return }
+    if (formData.category === 'event' && !formData.event_id) { alert('Please select which event this donation is for.'); return }
     setSubmitting(true)
     const { error } = await supabase.from('donations').insert([{
       donor_id: selectedDonor.id, amount: parseFloat(formData.amount), donation_method: formData.donation_method,
       donation_date: formData.donation_date, purpose: formData.purpose, notes: formData.notes || null,
+      category: formData.category, event_id: formData.category === 'event' ? formData.event_id : null, source: 'manual',
     }])
     setSubmitting(false)
     if (error) { alert('Error recording donation.'); return }
     setSuccess(true)
-    setFormData({ amount: '', donation_method: donationMethods[0] || '', donation_date: new Date().toISOString().split('T')[0], purpose: donationPurposes[0] || '', notes: '' })
+    setFormData({ amount: '', donation_method: donationMethods[0] || '', donation_date: new Date().toISOString().split('T')[0], purpose: donationPurposes[0] || '', notes: '', category: 'one_time', event_id: '' })
     setSearchTerm(''); setSelectedDonor(null)
     fetchDonations()
     setTimeout(() => setSuccess(false), 3000)
@@ -119,6 +169,26 @@ export default function DonationsPage() {
             <form onSubmit={handleAddNewDonor} className="space-y-3">
               <input type="text" required value={newDonorData.name} onChange={e => setNewDonorData({ ...newDonorData, name: e.target.value })}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="Full name *" />
+              {nameMatch?.kind === 'donor' && (
+                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+                  <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                  <span className="flex-1">
+                    A donor named &quot;{nameMatch.donor.name}&quot; already exists — this looks like it might be the same person.
+                  </span>
+                  <button type="button"
+                    onClick={() => { setSelectedDonor(nameMatch.donor); setSearchTerm(nameMatch.donor.name); setShowNewDonorForm(false) }}
+                    className="text-amber-900 underline font-medium flex-shrink-0">Use existing instead</button>
+                </div>
+              )}
+              {nameMatch?.kind === 'parent' && (
+                <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+                  <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                  <span>
+                    &quot;{nameMatch.parentName}&quot; is already on file as a parent of {nameMatch.student.first_name} {nameMatch.student.last_name} in Tuition —
+                    submitting will create their donor contact linked to that student.
+                  </span>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <input type="email" value={newDonorData.email} onChange={e => setNewDonorData({ ...newDonorData, email: e.target.value })}
                   className="px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="Email" />
@@ -208,6 +278,31 @@ export default function DonationsPage() {
           </div>
 
           <div>
+            <label className="text-sm font-medium text-slate-700 mb-1.5">Category *</label>
+            <select required value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value, event_id: e.target.value === 'event' ? formData.event_id : '' })}
+              className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+              {DONATION_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+          </div>
+
+          {formData.category === 'event' && (
+            <div>
+              <label className="text-sm font-medium text-slate-700 mb-1.5 flex items-center gap-1.5"><PartyPopper size={13} />Event *</label>
+              {events.length ? (
+                <select required value={formData.event_id} onChange={e => setFormData({ ...formData, event_id: e.target.value })}
+                  className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                  <option value="">— select event —</option>
+                  {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+                </select>
+              ) : (
+                <Link href="/admin/events" className="block px-3 py-2.5 border border-amber-200 bg-amber-50 rounded-lg text-sm text-amber-700">
+                  No events yet — create one first →
+                </Link>
+              )}
+            </div>
+          )}
+
+          <div>
             <label className="text-sm font-medium text-slate-700 mb-1.5">Notes</label>
             <textarea value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })}
               className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" rows={2} />
@@ -235,6 +330,7 @@ export default function DonationsPage() {
                 <th className="text-left px-5 py-3 text-slate-500 font-medium">Donor</th>
                 <th className="text-left px-5 py-3 text-slate-500 font-medium">Date</th>
                 <th className="text-left px-5 py-3 text-slate-500 font-medium hidden md:table-cell">Purpose</th>
+                <th className="text-left px-5 py-3 text-slate-500 font-medium hidden lg:table-cell">Category</th>
                 <th className="text-left px-5 py-3 text-slate-500 font-medium hidden md:table-cell">Method</th>
                 <th className="text-right px-5 py-3 text-slate-500 font-medium">Amount</th>
               </tr>
@@ -246,12 +342,15 @@ export default function DonationsPage() {
                   <td className="px-5 py-3 font-medium text-slate-900">{d.donors.name}</td>
                   <td className="px-5 py-3 text-slate-600">{new Date(d.donation_date).toLocaleDateString()}</td>
                   <td className="px-5 py-3 text-slate-600 hidden md:table-cell">{d.purpose}</td>
+                  <td className="px-5 py-3 text-slate-600 hidden lg:table-cell">
+                    {d.events?.name ?? DONATION_CATEGORIES.find(c => c.value === d.category)?.label ?? '—'}
+                  </td>
                   <td className="px-5 py-3 text-slate-600 hidden md:table-cell">{d.donation_method}</td>
                   <td className="px-5 py-3 text-right font-semibold text-green-600">{formatCurrency(Number(d.amount))}</td>
                 </tr>
               ))}
               {!donations.length && (
-                <tr><td colSpan={5} className="px-5 py-10 text-center text-slate-400">No donations yet.</td></tr>
+                <tr><td colSpan={6} className="px-5 py-10 text-center text-slate-400">No donations yet.</td></tr>
               )}
             </tbody>
           </table>

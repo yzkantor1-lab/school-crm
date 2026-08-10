@@ -33,7 +33,7 @@ export default function TuitionSection({ studentId }: { studentId: string }) {
     async function load() {
       const [{ data: p }, { data: pay }] = await Promise.all([
         supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
-        supabase.from('tuition_payments').select('id,tuition_plan_id,amount,status').eq('student_id', studentId).eq('status', 'paid'),
+        supabase.from('tuition_payments').select('id,tuition_plan_id,amount,status').eq('student_id', studentId).in('status', ['paid', 'partial', 'forgiven']),
       ])
       setPlans(p || [])
       setPayments(pay || [])

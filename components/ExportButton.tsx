@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { Download, FileText, Sheet } from 'lucide-react'
+import { Download, FileText, Sheet, Mail } from 'lucide-react'
 import { exportToCSV, exportToPDF, type ExportColumn } from '@/lib/export'
+import EmailExportModal from '@/components/EmailExportModal'
 
 type Props = {
   data: Record<string, unknown>[]
@@ -17,6 +18,7 @@ type Props = {
 export default function ExportButton({ data, columns, filename, title, disabled, size = 'md', label }: Props) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [showEmail, setShowEmail] = useState(false)
 
   async function run(type: 'csv' | 'pdf') {
     setBusy(true)
@@ -70,8 +72,25 @@ export default function ExportButton({ data, columns, filename, title, disabled,
               <FileText size={15} className="text-red-500" />
               PDF
             </button>
+            <button
+              onClick={() => { setOpen(false); setShowEmail(true) }}
+              className="flex items-center gap-2.5 w-full px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors border-t border-slate-100"
+            >
+              <Mail size={15} className="text-blue-500" />
+              Email…
+            </button>
           </div>
         </>
+      )}
+
+      {showEmail && (
+        <EmailExportModal
+          onClose={() => setShowEmail(false)}
+          data={data}
+          columns={columns}
+          filename={filename}
+          title={title}
+        />
       )}
     </div>
   )

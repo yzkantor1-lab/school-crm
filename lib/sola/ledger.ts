@@ -63,10 +63,38 @@ export async function recordApprovedCharge(
       payment_type: opts.purpose,
       notes: refNote,
     }])
+  } else if (opts.type === 'student' && opts.purpose === 'phone_charge') {
+    // Plan-independent, like registration_fee — the recurring schedule (not
+    // any tuition_plan) is what determines whether this keeps billing.
+    await supabase.from('tuition_payments').insert([{
+      tuition_plan_id: null,
+      student_id: opts.id,
+      amount: opts.amount,
+      payment_date: new Date().toISOString().slice(0, 10),
+      status: 'paid',
+      payment_method: label,
+      payment_type: 'phone_charge',
+      notes: refNote,
+    }])
   } else if (opts.type === 'student' && opts.purpose === 'registration_fee') {
+    const today = new Date().toISOString().slice(0, 10)
+    // Registration fee balance/status is now derived from tuition_payments
+    // (same as tuition/building fund) so it supports partial payments —
+    // insert a real payment row, and keep the flat student columns as a
+    // convenience mirror for the "has a fee been queued" check.
+    await supabase.from('tuition_payments').insert([{
+      tuition_plan_id: null,
+      student_id: opts.id,
+      amount: opts.amount,
+      payment_date: today,
+      status: 'paid',
+      payment_method: label,
+      payment_type: 'registration_fee',
+      notes: refNote,
+    }])
     await supabase.from('students').update({
       registration_fee_status: 'paid',
-      registration_fee_paid_date: new Date().toISOString().slice(0, 10),
+      registration_fee_paid_date: today,
     }).eq('id', opts.id)
   } else if (opts.type === 'donor') {
     await supabase.from('donations').insert([{

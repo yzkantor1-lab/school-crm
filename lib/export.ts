@@ -4,27 +4,51 @@ export type ExportColumn = {
   format?: (val: never) => string
 }
 
-// ── CSV ────────────────────────────────────────────────────────────────────────
-export function exportToCSV(data: Record<string, unknown>[], columns: ExportColumn[], filename: string) {
-  const headers = columns.map(c => `"${c.header}"`).join(',')
-  const rows = data.map(row =>
+function cellsFor(data: Record<string, unknown>[], columns: ExportColumn[]): string[][] {
+  return data.map(row =>
     columns.map(c => {
       const raw = row[c.key] ?? ''
-      const val = c.format ? c.format(raw as never) : String(raw)
-      return `"${val.replace(/"/g, '""')}"`
-    }).join(',')
+      return c.format ? c.format(raw as never) : String(raw)
+    })
   )
-  const csv = [headers, ...rows].join('\n')
-  download(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `${filename}.csv`)
+}
+
+// UTF-8-safe base64 — plain btoa() chokes on any non-Latin1 character (an
+// accented name, a curly quote pasted from Word), which real school data
+// hits often enough that skipping this would silently break attachments.
+function toBase64(str: string): string {
+  const bytes = new TextEncoder().encode(str)
+  let binary = ''
+  bytes.forEach(b => { binary += String.fromCharCode(b) })
+  return btoa(binary)
+}
+
+function download(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = name; a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ── CSV ────────────────────────────────────────────────────────────────────────
+function csvContent(data: Record<string, unknown>[], columns: ExportColumn[]): string {
+  const headers = columns.map(c => `"${c.header}"`).join(',')
+  const rows = cellsFor(data, columns).map(cells =>
+    cells.map(val => `"${val.replace(/"/g, '""')}"`).join(',')
+  )
+  return [headers, ...rows].join('\n')
+}
+
+export function exportToCSV(data: Record<string, unknown>[], columns: ExportColumn[], filename: string) {
+  download(new Blob([csvContent(data, columns)], { type: 'text/csv;charset=utf-8;' }), `${filename}.csv`)
+}
+
+export function getExportCsvBase64(data: Record<string, unknown>[], columns: ExportColumn[]): string {
+  return toBase64(csvContent(data, columns))
 }
 
 // ── PDF ────────────────────────────────────────────────────────────────────────
-export async function exportToPDF(
-  data: Record<string, unknown>[],
-  columns: ExportColumn[],
-  filename: string,
-  title?: string,
-) {
+async function buildPdfDoc(data: Record<string, unknown>[], columns: ExportColumn[], title?: string) {
   const { default: jsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
 
@@ -44,24 +68,32 @@ export async function exportToPDF(
   autoTable(doc, {
     startY: title ? 30 : 14,
     head: [columns.map(c => c.header)],
-    body: data.map(row =>
-      columns.map(c => {
-        const raw = row[c.key] ?? ''
-        return c.format ? c.format(raw as never) : String(raw)
-      })
-    ),
+    body: cellsFor(data, columns),
     styles: { fontSize: 8, cellPadding: 3 },
     headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     margin: { left: 14, right: 14 },
   })
 
+  return doc
+}
+
+export async function exportToPDF(
+  data: Record<string, unknown>[],
+  columns: ExportColumn[],
+  filename: string,
+  title?: string,
+) {
+  const doc = await buildPdfDoc(data, columns, title)
   doc.save(`${filename}.pdf`)
 }
 
-function download(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = name; a.click()
-  URL.revokeObjectURL(url)
+export async function getExportPdfBase64(
+  data: Record<string, unknown>[],
+  columns: ExportColumn[],
+  title?: string,
+): Promise<string> {
+  const doc = await buildPdfDoc(data, columns, title)
+  const dataUri = doc.output('datauristring') as string
+  return dataUri.slice(dataUri.indexOf(',') + 1)
 }
