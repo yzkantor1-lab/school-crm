@@ -5,7 +5,9 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
-import { DollarSign, Calendar, CreditCard, FileText, UserPlus, X, AlertTriangle, PartyPopper } from 'lucide-react'
+import { DollarSign, Calendar, CreditCard, FileText, UserPlus, X, AlertTriangle, PartyPopper, Repeat } from 'lucide-react'
+import ChargeModal from '@/components/sola/ChargeModal'
+import RecurringModal from '@/components/sola/RecurringModal'
 
 type Donor = { id: string; name: string; email: string | null }
 type StudentParent = { id: string; first_name: string; last_name: string; father_name: string | null; mother_name: string | null }
@@ -51,6 +53,9 @@ export default function DonationsPage() {
     amount: '', donation_method: '', donation_date: new Date().toISOString().split('T')[0], purpose: '', notes: '',
     category: 'one_time', event_id: '',
   })
+  const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
+  const [showChargeModal, setShowChargeModal] = useState(false)
+  const [showRecurringModal, setShowRecurringModal] = useState(false)
 
   // Warn before creating a possible duplicate contact — matches by exact
   // normalized name against existing donors, or against a student's parent
@@ -107,6 +112,18 @@ export default function DonationsPage() {
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
   useEffect(() => { fetchSettings(); fetchDonors(); fetchDonations(); fetchEvents(); fetchStudentParents() }, [fetchSettings, fetchDonors, fetchDonations, fetchEvents, fetchStudentParents])
+
+  // Saved cards/bank accounts for whichever donor is currently selected —
+  // refetched each time the selection changes so Charge Now/Recurring below
+  // always offer the right donor's methods (or none, prompting a new one).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing stale methods immediately on donor change, not derived from a fetch
+    if (!selectedDonor) { setSavedPaymentMethods([]); return }
+    let cancelled = false
+    supabase.from('payment_methods').select('id,label').eq('donor_id', selectedDonor.id).order('created_at', { ascending: false })
+      .then(({ data }) => { if (!cancelled) setSavedPaymentMethods((data ?? []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' }))) })
+    return () => { cancelled = true }
+  }, [selectedDonor, supabase])
 
   async function handleAddNewDonor(e: React.FormEvent) {
     e.preventDefault()
@@ -240,8 +257,18 @@ export default function DonationsPage() {
               )}
             </div>
             {selectedDonor && (
-              <div className="mt-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
-                <span className="font-medium">Selected: </span>{selectedDonor.name}
+              <div className="mt-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800 flex items-center justify-between flex-wrap gap-2">
+                <span><span className="font-medium">Selected: </span>{selectedDonor.name}</span>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => setShowChargeModal(true)}
+                    className="flex items-center gap-1.5 bg-green-600 text-white px-3 py-1.5 rounded-lg hover:bg-green-700 transition text-xs font-medium">
+                    <CreditCard size={13} />Charge Now
+                  </button>
+                  <button type="button" onClick={() => setShowRecurringModal(true)}
+                    className="flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition text-xs font-medium">
+                    <Repeat size={13} />Recurring
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -356,6 +383,27 @@ export default function DonationsPage() {
           </table>
         )}
       </div>
+
+      {showChargeModal && selectedDonor && (
+        <ChargeModal
+          onClose={() => setShowChargeModal(false)}
+          type="donor"
+          id={selectedDonor.id}
+          purposeOptions={[{ value: 'donation', label: 'Donation' }]}
+          savedMethods={savedPaymentMethods}
+          onCharged={fetchDonations}
+        />
+      )}
+      {showRecurringModal && selectedDonor && (
+        <RecurringModal
+          onClose={() => setShowRecurringModal(false)}
+          type="donor"
+          id={selectedDonor.id}
+          purposeOptions={[{ value: 'donation', label: 'Donation' }]}
+          savedMethods={savedPaymentMethods}
+          onCreated={fetchDonations}
+        />
+      )}
     </div>
   )
 }
