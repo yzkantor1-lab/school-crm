@@ -126,10 +126,18 @@ const PaymentFields = forwardRef<PaymentFieldsHandle, { method: 'card' | 'ach' }
   }), [method, name, exp, routing, accountType, cardNumId, cvvId, achId])
 
   if (loadError) return <p className="text-sm text-red-600">{loadError}</p>
-  if (!ready) return <p className="text-sm text-slate-400">Loading payment form…</p>
 
+  // The iframes must exist in the DOM before setAccount() runs — Cardknox's
+  // SDK wires itself up to whatever data-ifields-id elements are present at
+  // that moment, with no later discovery. Gating this whole return behind
+  // `ready` (as an earlier version did) meant the iframes didn't mount until
+  // *after* setAccount() had already run, so the SDK never found them:
+  // getTokens() would "succeed" with nothing to report, silently producing
+  // an empty token. Always render the fields; only the loading note is
+  // conditional.
   return (
     <div className="space-y-3">
+      {!ready && <p className="text-xs text-slate-400">Loading payment form…</p>}
       <div>
         <label className="block text-xs font-medium text-slate-500 mb-1">
           {method === 'card' ? 'Name on Card' : 'Name on Account'}
