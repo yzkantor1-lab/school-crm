@@ -25,7 +25,13 @@ export async function GET() {
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
-    scope: ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/userinfo.email'],
+    // lib/email.ts sends mail via nodemailer's Gmail SMTP OAuth2 transport
+    // (XOAUTH2 over smtp.gmail.com), not the Gmail API directly — that SMTP
+    // auth mechanism requires the full mail.google.com scope; the narrower
+    // gmail.send API scope is valid for Gmail API calls but gets rejected by
+    // Gmail's SMTP server with "535-5.7.8 Username and Password not
+    // accepted" even though nodemailer is correctly attempting OAuth2.
+    scope: ['https://mail.google.com/', 'https://www.googleapis.com/auth/userinfo.email'],
   })
 
   return NextResponse.redirect(url)
