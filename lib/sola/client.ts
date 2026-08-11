@@ -14,6 +14,12 @@ const V2_BASE = 'https://api.cardknox.com/v2'
 const SOFTWARE_NAME = 'SchoolCRM'
 const SOFTWARE_VERSION = '1.0'
 
+// Previously believed to be required only on List*/Get* endpoints (see
+// solaListRequest below) — a live "Missing: X-Recurring-Api-Version header"
+// error on /CreateCustomer proved that assumption wrong. Sola's v2 API
+// requires this on every call, so it's sent uniformly now.
+const RECURRING_API_VERSION = '2.1'
+
 function apiKey(): string {
   const key = process.env.SOLA_API_KEY
   if (!key) throw new Error('SOLA_API_KEY is not configured — add it in Settings > Payment Settings.')
@@ -36,7 +42,7 @@ type SolaApiResponse = {
 async function solaRequest(endpoint: string, body: Record<string, unknown>): Promise<SolaApiResponse> {
   const res = await fetch(`${V2_BASE}${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: apiKey() },
+    headers: { 'Content-Type': 'application/json', Authorization: apiKey(), 'X-Recurring-Api-Version': RECURRING_API_VERSION },
     body: JSON.stringify({ SoftwareName: SOFTWARE_NAME, SoftwareVersion: SOFTWARE_VERSION, ...body }),
   })
   return (await res.json()) as SolaApiResponse
@@ -151,10 +157,6 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
 }
 
 // ── Sola Sync (read-only history pull) ──────────────────────────────────────
-// List*/Get* endpoints require X-Recurring-Api-Version (confirmed against
-// the live account — '2.0'/'2.1'/'2.2' are the only supported values, and
-// unlike the write endpoints above, requests fail outright without it).
-const RECURRING_API_VERSION = '2.1'
 const LIST_PAGE_SIZE = 500
 
 type SolaListResponse = { Result?: string; Error?: string; NextToken?: string }
