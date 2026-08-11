@@ -490,7 +490,7 @@ function PaymentsTab() {
   const [saved, setSaved] = useState(false)
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/payment-settings')
+    const res = await fetch('/api/sola-settings')
     const json = await res.json()
     setState(json)
   }, [])
@@ -501,7 +501,7 @@ function PaymentsTab() {
   async function save() {
     if (!keyInput.trim()) { setError('Enter a key value.'); return }
     setSaving(true); setError('')
-    const res = await fetch('/api/payment-settings', {
+    const res = await fetch('/api/sola-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: keyInput.trim() }),
@@ -519,7 +519,7 @@ function PaymentsTab() {
   async function remove() {
     if (!confirm('Remove the Sola API key? Payment processing will stop working until a new key is added.')) return
     setSaving(true); setError('')
-    const res = await fetch('/api/payment-settings', { method: 'DELETE' })
+    const res = await fetch('/api/sola-settings', { method: 'DELETE' })
     const json = await res.json()
     setSaving(false)
     if (!res.ok) { setError(json.error || 'Failed to remove.'); return }
@@ -531,7 +531,7 @@ function PaymentsTab() {
     const next = !state.testMode
     if (!next && !confirm('Switch to LIVE mode? Real charges will be sent to Sola and real money will move. Are you sure?')) return
     setTogglingTestMode(true); setError('')
-    const res = await fetch('/api/payment-settings', {
+    const res = await fetch('/api/sola-settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ testMode: next }),

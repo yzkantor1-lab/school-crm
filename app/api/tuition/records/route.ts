@@ -4,10 +4,15 @@ import { createClient } from '@/lib/supabase/server'
 type TuitionPayment = { id: string; tuition_plan_id: string; amount: number; status: string; payment_type: string | null; payment_date: string | null }
 
 // Runs server-side so the browser never talks to Supabase's REST API directly
-// for this endpoint — some ad blockers / privacy extensions block requests
-// whose URL contains "payment", which was silently killing the client-side
-// fetch to /rest/v1/tuition_payments (while sibling requests to /students,
-// /tuition_plans went through fine on the same page).
+// for this data — some content filters (school/office network-level ad and
+// content blockers, e.g. the one that surfaced this: a "GenTech BlockPage")
+// block any request whose URL contains "payment", regardless of which
+// server ultimately answers it. This route used to be named
+// /api/tuition/payments, which still tripped the exact same filter — moving
+// the request off Supabase's domain wasn't enough on its own; the URL text
+// itself has to avoid the trigger word. Kept as "records" here specifically
+// so a future rename doesn't accidentally reintroduce "payment"/"payments"
+// into the path.
 export async function GET() {
   const supabase = await createClient()
 

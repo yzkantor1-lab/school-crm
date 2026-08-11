@@ -265,14 +265,17 @@ export default function TuitionPage() {
     throw new Error(`${label} — ${msg} (after ${attempts} attempts)`)
   }, [])
 
-  // Routed through our own /api/tuition/payments endpoint (server-side), not
-  // fetched from Supabase directly in the browser — some ad blockers / privacy
-  // extensions block requests whose URL contains "payment", which was silently
-  // killing this one fetch while sibling requests (students, tuition_plans)
-  // on the same page went through fine.
+  // Routed through our own /api/tuition/records endpoint (server-side), not
+  // fetched from Supabase directly in the browser — some content filters
+  // (school/office network-level blockers) reject any request whose URL
+  // contains "payment"/"payments", regardless of which server answers it.
+  // This endpoint used to be named /api/tuition/payments, which still
+  // tripped the same filter — the URL text itself has to avoid the word,
+  // not just which host it's sent to. Confirmed live via a "GenTech
+  // BlockPage" response in place of the real JSON.
   const fetchAllPayments = useCallback(async () => {
     return withRetry('payments', async () => {
-      const res = await fetch('/api/tuition/payments')
+      const res = await fetch('/api/tuition/records')
       if (!res.ok) {
         const body = await res.json().catch(() => null)
         throw new Error(body?.error || `HTTP ${res.status}`)
