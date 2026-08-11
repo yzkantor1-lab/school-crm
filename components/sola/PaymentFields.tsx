@@ -142,13 +142,13 @@ const PaymentFields = forwardRef<PaymentFieldsHandle, { method: 'card' | 'ach' }
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Card Number</label>
             <iframe title="Card Number" className={iframeClass} data-ifields-id={cardNumId} data-ifields-placeholder="Card Number" src={`${IFIELDS_BASE}/ifield.htm`} />
-            <input type="hidden" name={cardNumId} data-ifields-id={`${cardNumId}-token`} />
+            <input type="hidden" id={`${cardNumId}-token`} name={cardNumId} data-ifields-id={`${cardNumId}-token`} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">CVV</label>
               <iframe title="CVV" className={iframeClass} data-ifields-id={cvvId} data-ifields-placeholder="CVV" src={`${IFIELDS_BASE}/ifield.htm`} />
-              <input type="hidden" name={cvvId} data-ifields-id={`${cvvId}-token`} />
+              <input type="hidden" id={`${cvvId}-token`} name={cvvId} data-ifields-id={`${cvvId}-token`} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">Expiration (MMYY)</label>
@@ -165,7 +165,7 @@ const PaymentFields = forwardRef<PaymentFieldsHandle, { method: 'card' | 'ach' }
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Account Number</label>
             <iframe title="Account Number" className={iframeClass} data-ifields-id={achId} data-ifields-placeholder="Account Number" src={`${IFIELDS_BASE}/ifield.htm`} />
-            <input type="hidden" name={achId} data-ifields-id={`${achId}-token`} />
+            <input type="hidden" id={`${achId}-token`} name={achId} data-ifields-id={`${achId}-token`} />
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Account Type</label>
