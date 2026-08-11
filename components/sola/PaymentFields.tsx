@@ -15,7 +15,11 @@ const IFIELDS_BASE = `https://cdn.cardknox.com/ifields/${IFIELDS_VERSION}`
 declare global {
   interface Window {
     setAccount?: (key: string, softwareName: string, version: string) => void
-    getTokens?: (onSuccess: () => void, onError: (err: unknown) => void, timeoutMs: number) => void
+    // Cardknox's actual failure callback receives (overallError, invalidFieldIds)
+    // — typed loosely since it's an untyped third-party global, but we read
+    // both args now instead of discarding them, so a real failure reason
+    // surfaces instead of a generic message.
+    getTokens?: (onSuccess: () => void, onError: (err: unknown, invalidFields?: unknown) => void, timeoutMs: number) => void
   }
 }
 
@@ -89,18 +93,37 @@ const PaymentFields = forwardRef<PaymentFieldsHandle, { method: 'card' | 'ach' }
         () => {
           const tokenInputId = method === 'card' ? `${cardNumId}-token` : `${achId}-token`
           const token = (document.getElementById(tokenInputId) as HTMLInputElement | null)?.value
-          if (!token) { reject(new Error('Could not tokenize payment details — check the card/account number.')); return }
+          if (!token) {
+            // Cardknox reported success but no token landed in the DOM — log
+            // every ifields-tracked element's state so the console shows
+            // exactly which field(s) came back empty, instead of guessing.
+            const trackedIds = method === 'card' ? [cardNumId, cvvId] : [achId]
+            const debugState = trackedIds.map(id => {
+              const el = document.getElementById(`${id}-token`) as HTMLInputElement | null
+              return `${id}: ${el ? `element found, value="${el.value}"` : 'element NOT FOUND in DOM'}`
+            })
+            console.error('iFields getTokens() succeeded but token was empty.', { tokenInputId, debugState })
+            reject(new Error(`Could not tokenize payment details — check the card/account number. (debug: ${debugState.join('; ')})`))
+            return
+          }
           resolve(
             method === 'card'
               ? { tokenType: 'cc', token, label: name ? `Card — ${name}` : 'Card', exp, name }
               : { tokenType: 'ach', token, label: name ? `Bank account — ${name}` : 'Bank account', routing, accountType, name }
           )
         },
-        (err) => reject(err instanceof Error ? err : new Error('Tokenization failed.')),
+        (err, invalidFields) => {
+          console.error('iFields getTokens() error callback:', err, invalidFields)
+          const detail = [
+            typeof err === 'string' ? err : err instanceof Error ? err.message : JSON.stringify(err),
+            invalidFields ? `invalid fields: ${JSON.stringify(invalidFields)}` : null,
+          ].filter(Boolean).join(' — ')
+          reject(new Error(`Tokenization failed: ${detail}`))
+        },
         30000
       )
     }),
-  }), [method, name, exp, routing, accountType, cardNumId, achId])
+  }), [method, name, exp, routing, accountType, cardNumId, cvvId, achId])
 
   if (loadError) return <p className="text-sm text-red-600">{loadError}</p>
   if (!ready) return <p className="text-sm text-slate-400">Loading payment form…</p>
