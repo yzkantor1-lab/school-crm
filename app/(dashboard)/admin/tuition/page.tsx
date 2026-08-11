@@ -265,25 +265,6 @@ export default function TuitionPage() {
     throw new Error(`${label} — ${msg} (after ${attempts} attempts)`)
   }, [])
 
-  // Routed through our own /api/tuition/records endpoint (server-side), not
-  // fetched from Supabase directly in the browser — some content filters
-  // (school/office network-level blockers) reject any request whose URL
-  // contains "payment"/"payments", regardless of which server answers it.
-  // This endpoint used to be named /api/tuition/payments, which still
-  // tripped the same filter — the URL text itself has to avoid the word,
-  // not just which host it's sent to. Confirmed live via a "GenTech
-  // BlockPage" response in place of the real JSON.
-  const fetchAllPayments = useCallback(async () => {
-    return withRetry('payments', async () => {
-      const res = await fetch('/api/tuition/records')
-      if (!res.ok) {
-        const body = await res.json().catch(() => null)
-        throw new Error(body?.error || `HTTP ${res.status}`)
-      }
-      return (await res.json()) as TuitionPayment[]
-    })
-  }, [withRetry])
-
   const loadData = useCallback(async () => {
     setLoading(true)
     setDebugInfo(null)
@@ -299,12 +280,33 @@ export default function TuitionPage() {
         if (error) throw error
         return data
       })
-      plans = await withRetry('tuition_plans', async () => {
-        const { data, error } = await supabase.from('tuition_plans').select('*')
+      // Payments are embedded directly in this same request (a Supabase
+      // nested/relational select), not fetched from a separate endpoint —
+      // a network-level content filter on at least one real school's
+      // network blocks any request under /api/tuition/* regardless of what
+      // it's named (confirmed live: renaming /api/tuition/payments to
+      // /api/tuition/records still got blocked, identical "GenTech
+      // BlockPage" response). The only reliable fix is not having a
+      // separate URL for this data at all — piggyback on the tuition_plans
+      // request, which is already proven to get through.
+      const plansWithPayments = await withRetry('tuition_plans', async () => {
+        const { data, error } = await supabase
+          .from('tuition_plans')
+          .select('*, tuition_payments(id,tuition_plan_id,amount,status,payment_type,payment_date)')
         if (error) throw error
         return data || []
       })
-      payments = await fetchAllPayments()
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructured only to omit it from the rest spread
+      plans = plansWithPayments.map(({ tuition_payments: _tp, ...plan }) => plan) as TuitionPlan[]
+      // Same filter the old dedicated endpoint applied server-side — only
+      // these count toward a plan's paid total (matches planPaid/planExpected
+      // below, which assume payments arriving here are already narrowed to
+      // this set).
+      payments = plansWithPayments.flatMap(p =>
+        ((p.tuition_payments ?? []) as TuitionPayment[]).filter(pay =>
+          ['paid', 'partial', 'forgiven'].includes(pay.status) && ['tuition', 'building_fund'].includes(pay.payment_type ?? '')
+        )
+      )
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setDebugInfo(`Couldn't load tuition data: ${msg}`)
@@ -399,7 +401,7 @@ export default function TuitionPage() {
     setOutstandingSemesterRows(outstandingSemester)
     setOutstandingMonthRows(outstandingMonth)
     setLoading(false)
-  }, [supabase, withRetry, fetchAllPayments])
+  }, [supabase, withRetry])
 
   /* eslint-disable react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await */
   useEffect(() => {
