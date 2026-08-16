@@ -135,7 +135,7 @@ export async function createSchedule(input: SolaScheduleInput): Promise<SolaCrea
     TotalPayments: input.totalPayments,
     StartDate: input.startDate,
     ScheduleName: input.scheduleName,
-    Custom01: input.custom01,
+    Custom02: input.custom02,
     DaysBetweenRetries: input.daysBetweenRetries,
     FailedTransactionRetryTimes: input.failedTransactionRetryTimes,
   })

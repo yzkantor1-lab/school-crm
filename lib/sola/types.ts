@@ -55,7 +55,7 @@ export type SolaScheduleInput = {
   totalPayments?: number       // omit = open-ended recurring; set = payment plan/installments
   startDate: string             // YYYY-MM-DD
   scheduleName?: string
-  custom01?: string             // used to correlate webhook events back to a CRM record
+  custom02?: string             // used to correlate webhook events back to a CRM record — Custom01 is reserved by Sola and always rejects requests, so this uses Custom02
   daysBetweenRetries?: number
   failedTransactionRetryTimes?: number
 }

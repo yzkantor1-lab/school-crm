@@ -57,11 +57,12 @@ export async function POST(req: Request) {
       })
   if (!method.ok) return NextResponse.json({ error: method.error }, { status: 502 })
 
-  // Custom01 carries context back to us on every webhook event this schedule
+  // Custom02 carries context back to us on every webhook event this schedule
   // generates, since those charges happen on Sola's own clock, not a request
   // we initiate — this is how the webhook knows which CRM record/purpose to
-  // credit.
-  const custom01 = JSON.stringify({ type: body.type, id: body.id, purpose: body.purpose })
+  // credit. (Custom01 is reserved by Sola — sending it always fails with
+  // "Invalid parameters: Custom01" — so this uses Custom02 instead.)
+  const custom02 = JSON.stringify({ type: body.type, id: body.id, purpose: body.purpose })
 
   const created = await createSchedule({
     customerId: customer.solaCustomerId,
@@ -71,7 +72,7 @@ export async function POST(req: Request) {
     intervalCount: body.intervalCount,
     totalPayments: body.totalPayments,
     startDate: body.startDate,
-    custom01,
+    custom02,
     daysBetweenRetries: body.daysBetweenRetries,
     failedTransactionRetryTimes: body.failedTransactionRetryTimes,
   })

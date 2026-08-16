@@ -68,8 +68,10 @@ export async function POST(req: Request) {
   const refNum = fields.xRefNum || ''
   const amount = parseFloat(fields.xAmount || '0')
   // Field name for echoed custom data isn't confirmed by docs — check both
-  // the classic gateway naming (xCustom01) and the v2 REST naming (Custom01).
-  const customRaw = fields.xCustom01 || fields.Custom01 || fields.custom01 || ''
+  // the classic gateway naming (xCustom02) and the v2 REST naming (Custom02).
+  // (We send this data in Custom02, not Custom01 — Custom01 is reserved by
+  // Sola and CreateSchedule/ProcessTransaction reject it outright.)
+  const customRaw = fields.xCustom02 || fields.Custom02 || fields.custom02 || ''
   const methodType: 'card' | 'ach' = fields.xMaskedCardNumber || fields.xCardType ? 'card' : 'ach'
 
   let context: ScheduleContext | null = null
