@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Search, Plus, X, User, Mail, Phone, MapPin, Tag, Heart, Grid3x3, List, Users } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
+import NameInput from '@/components/NameInput'
+import PhoneInput from '@/components/PhoneInput'
 
 const DONOR_EXPORT_COLS = [
   { header: 'Name',         key: 'name' },
@@ -182,8 +184,8 @@ export default function DonorsPage() {
           <form onSubmit={addDonor} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Name *</label>
-              <input type="text" required value={formData.name}
-                onChange={e => setFormData({ ...formData, name: e.target.value })}
+              <NameInput required value={formData.name}
+                onChange={v => setFormData({ ...formData, name: v })}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                 placeholder="Full name" />
             </div>
@@ -197,8 +199,8 @@ export default function DonorsPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Phone</label>
-                <input type="tel" value={formData.phone_number}
-                  onChange={e => setFormData({ ...formData, phone_number: e.target.value })}
+                <PhoneInput value={formData.phone_number}
+                  onChange={v => setFormData({ ...formData, phone_number: v })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                   placeholder="(555) 123-4567" />
               </div>

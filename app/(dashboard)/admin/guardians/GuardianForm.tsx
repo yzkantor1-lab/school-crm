@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Plus } from 'lucide-react'
+import SmartFormField from '@/components/SmartFormField'
 
 export default function GuardianForm() {
   const router = useRouter()
@@ -38,7 +39,7 @@ export default function GuardianForm() {
       {[['First Name *', 'first_name', true], ['Last Name *', 'last_name', true], ['Email', 'email', false], ['Phone', 'phone_primary', false], ['Address', 'address_line1', false], ['City', 'city', false], ['State', 'state', false], ['ZIP', 'zip', false]].map(([label, key, req]) => (
         <div key={key as string}>
           <label className="block text-xs font-medium text-slate-500 mb-1">{label as string}</label>
-          <input value={form[key as keyof typeof form]} onChange={e => set(key as string, e.target.value)} required={req as boolean}
+          <SmartFormField fieldKey={key as string} value={form[key as keyof typeof form]} onChange={v => set(key as string, v)} required={req as boolean}
             className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
       ))}

@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SCHOOL_YEAR_SEMESTERS, ALL_SEMESTER_VALUES, isSemesterUpcoming, GRADE_LEVELS, currentGradeLevel } from '@/lib/semesters'
 import { loadGoogleMapsScript, type GoogleAutocomplete } from '@/lib/googleMaps'
+import SmartFormField from '@/components/SmartFormField'
+import NameInput from '@/components/NameInput'
+import PhoneInput from '@/components/PhoneInput'
 
 const field = (label: string, key: string, required = false) => ({ label, key, type: 'text', required })
 const dateField = (label: string, key: string) => ({ label, key, type: 'date', required: false })
@@ -239,9 +242,9 @@ function LastNameOverride({
         <option value="different">Different last name</option>
       </select>
       {mode === 'different' && (
-        <input
+        <NameInput
           value={value}
-          onChange={e => onChange(e.target.value)}
+          onChange={onChange}
           placeholder="Last name"
           className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
@@ -301,15 +304,15 @@ function RemarriageFields({
       </select>
       {remarried && (
         <div className="grid grid-cols-2 gap-2 mt-1.5">
-          <input
+          <NameInput
             value={firstName}
-            onChange={e => onFirstNameChange(e.target.value)}
+            onChange={onFirstNameChange}
             placeholder={`${spouseLabel} First Name`}
             className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <input
+          <NameInput
             value={lastName}
-            onChange={e => onLastNameChange(e.target.value)}
+            onChange={onLastNameChange}
             placeholder={`${spouseLabel} Last Name`}
             className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
@@ -341,10 +344,11 @@ function GrandparentSection({
         {GRANDPARENT_NAME_FIELDS(prefix).map(([label, key, type]) => (
           <div key={key}>
             <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
-            <input
+            <SmartFormField
+              fieldKey={key}
               type={type}
               value={form[key] ?? ''}
-              onChange={e => set(key, e.target.value)}
+              onChange={v => set(key, v)}
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -356,9 +360,9 @@ function GrandparentSection({
             line entirely and was never expected to match the student's. */}
         <div>
           <label className="block text-xs font-medium text-slate-500 mb-1">Last Name</label>
-          <input
+          <NameInput
             value={grandparentsLastName}
-            onChange={e => set(`${prefix}_grandparents_last_name`, e.target.value)}
+            onChange={v => set(`${prefix}_grandparents_last_name`, v)}
             placeholder={prefix === 'paternal' && form.last_name ? `e.g. ${form.last_name}` : 'Family last name'}
             className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
@@ -366,10 +370,11 @@ function GrandparentSection({
         {GRANDPARENT_CONTACT_FIELDS(prefix).map(([label, key, type]) => (
           <div key={key}>
             <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
-            <input
+            <SmartFormField
+              fieldKey={key}
               type={type}
               value={form[key] ?? ''}
-              onChange={e => set(key, e.target.value)}
+              onChange={v => set(key, v)}
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -393,10 +398,9 @@ function GrandparentSection({
         <AddressFields label="Address" fieldPrefix={`${prefix}_grandparents`} form={form} set={set} />
         <div>
           <label className="block text-xs font-medium text-slate-500 mb-1">Home Number</label>
-          <input
-            type="tel"
+          <PhoneInput
             value={form[`${prefix}_grandparents_home_phone`] ?? ''}
-            onChange={e => set(`${prefix}_grandparents_home_phone`, e.target.value)}
+            onChange={v => set(`${prefix}_grandparents_home_phone`, v)}
             className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -510,11 +514,12 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
           {BASIC_FIELDS.map(({ label, key, type, required }) => (
             <div key={key}>
               <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
-              <input
+              <SmartFormField
+                fieldKey={key}
                 type={type}
                 required={required}
                 value={form[key] ?? ''}
-                onChange={e => set(key, e.target.value)}
+                onChange={v => set(key, v)}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -590,9 +595,10 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
           {CONTACT_FIELDS.map(({ label, key }) => (
             <div key={key}>
               <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
-              <input
+              <SmartFormField
+                fieldKey={key}
                 value={form[key] ?? ''}
-                onChange={e => set(key, e.target.value)}
+                onChange={v => set(key, v)}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -607,9 +613,10 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
           {PARENT_FIELDS.map(({ label, key }) => (
             <div key={key}>
               <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
-              <input
+              <SmartFormField
+                fieldKey={key}
                 value={form[key] ?? ''}
-                onChange={e => set(key, e.target.value)}
+                onChange={v => set(key, v)}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -731,10 +738,9 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Personal Phone</label>
-            <input
-              type="tel"
+            <PhoneInput
               value={form.personal_phone ?? ''}
-              onChange={e => set('personal_phone', e.target.value)}
+              onChange={v => set('personal_phone', v)}
               placeholder="Graduate's own phone number"
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
@@ -760,10 +766,11 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
               ] as const).map(([label, key, type]) => (
                 <div key={key}>
                   <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
-                  <input
+                  <SmartFormField
+                    fieldKey={key}
                     type={type}
                     value={form[key] ?? ''}
-                    onChange={e => set(key, e.target.value)}
+                    onChange={v => set(key, v)}
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -785,10 +792,11 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
               ] as const).map(([label, key, type]) => (
                 <div key={key}>
                   <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
-                  <input
+                  <SmartFormField
+                    fieldKey={key}
                     type={type}
                     value={form[key] ?? ''}
-                    onChange={e => set(key, e.target.value)}
+                    onChange={v => set(key, v)}
                     className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
