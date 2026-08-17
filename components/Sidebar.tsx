@@ -9,11 +9,12 @@ import {
   BookOpen, BookMarked, UtensilsCrossed, Receipt, Wallet,
   MessageSquare, CalendarDays, LogOut, Globe, Heart, DollarSign,
   HandHeart, Repeat, TrendingDown, BarChart, BadgeDollarSign, Settings, Award, RefreshCw, PartyPopper,
-  ArrowLeftRight, Menu, X
+  ArrowLeftRight, Menu, X, Bell
 } from 'lucide-react'
 
 const nav = [
   { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+  { label: 'Notifications', href: '/admin/notifications', icon: Bell },
   { label: 'Students', href: '/admin/students', icon: Users },
   { label: 'Alumni', href: '/admin/alumni', icon: Award },
   { label: 'Guardians', href: '/admin/guardians', icon: UserRound },

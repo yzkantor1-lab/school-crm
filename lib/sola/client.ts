@@ -217,6 +217,27 @@ export async function listAllSchedules(): Promise<SolaSchedule[]> {
   return all
 }
 
+// Card expiration (Exp) is sent to Sola at CreatePaymentMethod time but was
+// never stored locally — this is the only source of truth for it, including
+// for cards saved before that mattered. Returns every saved payment method
+// account-wide; callers match by paymentMethodId against payment_methods.
+export async function listAllPaymentMethods(): Promise<{ paymentMethodId: string; exp?: string; tokenType?: string }[]> {
+  type Raw = SolaListResponse & {
+    PaymentMethods?: Array<{ PaymentMethodId: string; TokenType?: string; Exp?: string }>
+  }
+  const all: { paymentMethodId: string; exp?: string; tokenType?: string }[] = []
+  let nextToken = ''
+  do {
+    const json = await solaListRequest<Raw>('/ListPaymentMethods', { NextToken: nextToken })
+    if (json.Result !== 'S') throw new Error(json.Error || 'Failed to list Sola payment methods')
+    for (const p of json.PaymentMethods ?? []) {
+      all.push({ paymentMethodId: p.PaymentMethodId, exp: p.Exp, tokenType: p.TokenType })
+    }
+    nextToken = json.NextToken ?? ''
+  } while (nextToken)
+  return all
+}
+
 // Fetches full contact detail for one customer — used only at the moment a
 // staff member actually creates a new donor from a Sola customer, not during
 // the bulk sync (ListCustomers is enough for matching; this is the one place
