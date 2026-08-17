@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react'
 import { X, Loader2, Check, AlertCircle } from 'lucide-react'
 import PaymentFields, { type PaymentFieldsHandle } from './PaymentFields'
+import { formatCurrency } from '@/lib/currency'
 
 type SavedMethod = { id: string; label: string }
 
@@ -14,6 +15,11 @@ type Props = {
   savedMethods: SavedMethod[]
   onCreated?: () => void
   defaultAmount?: number
+  // Outstanding balance per purpose (e.g. { tuition: 4200, building_fund: 300 }),
+  // already net of every payment on record (manual or otherwise) — lets a
+  // fixed-# -of-payments plan auto-divide what's actually still owed instead
+  // of the family's full original charge.
+  remainingBalances?: Record<string, number>
 }
 
 const INTERVALS = [
@@ -22,13 +28,26 @@ const INTERVALS = [
   { value: 'year', label: 'Yearly' },
 ]
 
-export default function RecurringModal({ onClose, type, id, purposeOptions, savedMethods, onCreated, defaultAmount }: Props) {
+export default function RecurringModal({ onClose, type, id, purposeOptions, savedMethods, onCreated, defaultAmount, remainingBalances }: Props) {
   const [amount, setAmount] = useState(defaultAmount != null ? String(defaultAmount) : '')
   const [purpose, setPurpose] = useState(purposeOptions[0]?.value ?? '')
   const [intervalType, setIntervalType] = useState<'week' | 'month' | 'year'>('month')
   const [intervalCount, setIntervalCount] = useState('1')
   const [ongoing, setOngoing] = useState(true)
   const [totalPayments, setTotalPayments] = useState('12')
+  const remainingBalance = remainingBalances?.[purpose]
+
+  // Fixed # of payments (a plan) has a known total to pay off — split what's
+  // actually still owed (already net of past payments, manual or otherwise)
+  // across however many payments are entered, instead of making staff do the
+  // division by hand. Open-ended recurring has no target total to divide.
+  function applyAutoAmount(nextPurpose: string, nextTotalPayments: string, nextOngoing: boolean) {
+    if (nextOngoing) return
+    const balance = remainingBalances?.[nextPurpose]
+    const n = parseInt(nextTotalPayments)
+    if (balance == null || !(n > 0)) return
+    setAmount((balance / n).toFixed(2))
+  }
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [methodChoice, setMethodChoice] = useState<string>(savedMethods[0]?.id ?? 'new')
   const [newMethodType, setNewMethodType] = useState<'card' | 'ach'>('card')
@@ -100,10 +119,16 @@ export default function RecurringModal({ onClose, type, id, purposeOptions, save
             <label className="block text-xs font-medium text-slate-500 mb-1">Amount per payment</label>
             <input type="number" step="0.01" min="0" value={amount} onChange={e => setAmount(e.target.value)}
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            {remainingBalance != null && (
+              <p className="text-xs text-slate-400 mt-1">
+                {formatCurrency(remainingBalance)} still owed
+                {!ongoing && parseInt(totalPayments) > 0 ? ` — split across ${totalPayments} payments` : ''}
+              </p>
+            )}
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">For</label>
-            <select value={purpose} onChange={e => setPurpose(e.target.value)}
+            <select value={purpose} onChange={e => { setPurpose(e.target.value); applyAutoAmount(e.target.value, totalPayments, ongoing) }}
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
               {purposeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
@@ -139,7 +164,7 @@ export default function RecurringModal({ onClose, type, id, purposeOptions, save
               }`}>
               Ongoing (recurring)
             </button>
-            <button type="button" onClick={() => setOngoing(false)}
+            <button type="button" onClick={() => { setOngoing(false); applyAutoAmount(purpose, totalPayments, false) }}
               className={`flex-1 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
                 !ongoing ? 'bg-blue-50 border-blue-300 text-blue-700' : 'border-slate-200 text-slate-500'
               }`}>
@@ -149,7 +174,7 @@ export default function RecurringModal({ onClose, type, id, purposeOptions, save
           {!ongoing && (
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">Number of payments</label>
-              <input type="number" min="1" value={totalPayments} onChange={e => setTotalPayments(e.target.value)}
+              <input type="number" min="1" value={totalPayments} onChange={e => { setTotalPayments(e.target.value); applyAutoAmount(purpose, e.target.value, ongoing) }}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           )}

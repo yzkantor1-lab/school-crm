@@ -22,6 +22,7 @@ import SentLettersPanel from '@/components/SentLettersPanel'
 import TuitionDocumentsPanel from '@/components/TuitionDocumentsPanel'
 import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
+import RecalculateScheduleModal from '@/components/sola/RecalculateScheduleModal'
 
 type Student = {
   id: string
@@ -90,9 +91,11 @@ type TuitionPayment = {
   created_at: string
 }
 
-// A Sola recurring schedule — used here just to know whether a Phone Charge
-// subscription is currently active for this student, so real credit-card
-// billing continues on Sola's own clock without any monthly staff action.
+// A Sola recurring schedule — covers Phone Charge (know whether a
+// subscription is currently active, so real credit-card billing continues
+// on Sola's own clock without any monthly staff action) and Tuition/Building
+// Fund (know whether a fixed-#-of-payments plan's schedule still matches
+// what's actually owed after a manual payment).
 type PaymentSchedule = {
   id: string
   status: string
@@ -100,6 +103,10 @@ type PaymentSchedule = {
   start_date: string
   interval_type: string
   interval_count: number
+  purpose: string
+  total_payments: number | null
+  payment_method_id: string | null
+  created_at: string
 }
 
 // A donation made by this student's linked parent(s) — display-only here,
@@ -193,6 +200,24 @@ function planBalances(plan: TuitionPlan, planPayments: TuitionPayment[]) {
     totalCharges: netTuition + buildingFund,
     totalBalance: tuitionBalance + buildingFundBalance,
   }
+}
+
+// A fixed-#-of-payments schedule's amount is only correct as of when it was
+// created — if a manual payment (recorded by staff, not the schedule itself)
+// lands afterward, the balance it's dividing has changed and the schedule
+// doesn't know. Sola-driven charges (both this schedule's own installments
+// and any one-time "Charge Now") are tagged with this exact note by
+// lib/sola/ledger.ts — anything else recorded since the schedule started is
+// a manual entry that the schedule's math hasn't accounted for.
+const SOLA_CHARGE_NOTE_PREFIX = 'Sola charge — ref'
+function scheduleNeedsRecalc(schedule: PaymentSchedule, planPayments: TuitionPayment[], purpose: 'tuition' | 'building_fund'): boolean {
+  if (schedule.status !== 'active' || !schedule.total_payments) return false
+  return planPayments.some(p =>
+    (p.payment_type ?? 'tuition') === purpose &&
+    COUNTS_AS_PAID.includes(p.status) &&
+    !!p.payment_date && p.payment_date >= schedule.start_date &&
+    !(p.notes ?? '').startsWith(SOLA_CHARGE_NOTE_PREFIX)
+  )
 }
 
 // Registration fee is a flat one-time charge tracked on the student (not
@@ -806,8 +831,11 @@ export default function StudentTuitionPage() {
   const [showChargeModal, setShowChargeModal] = useState(false)
   const [showRecurringModal, setShowRecurringModal] = useState(false)
   const [showPhoneRecurringModal, setShowPhoneRecurringModal] = useState(false)
-  const [phoneSchedules, setPhoneSchedules] = useState<PaymentSchedule[]>([])
+  const [schedules, setSchedules] = useState<PaymentSchedule[]>([])
   const [parentDonations, setParentDonations] = useState<ParentDonation[]>([])
+  const [recalcTarget, setRecalcTarget] = useState<{
+    purpose: 'tuition' | 'building_fund'; purposeLabel: string; schedule: PaymentSchedule; remainingBalance: number
+  } | null>(null)
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -818,14 +846,14 @@ export default function StudentTuitionPage() {
         supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
         supabase.from('payment_methods').select('id,label').eq('student_id', studentId).order('created_at', { ascending: false }),
         supabase.from('donor_students').select('donor_id').eq('student_id', studentId),
-        supabase.from('payment_schedules').select('id,status,amount,start_date,interval_type,interval_count')
-          .eq('student_id', studentId).eq('purpose', 'phone_charge').order('created_at', { ascending: false }),
+        supabase.from('payment_schedules').select('id,status,amount,start_date,interval_type,interval_count,purpose,total_payments,payment_method_id,created_at')
+          .eq('student_id', studentId).order('created_at', { ascending: false }),
       ])
       setStudent(s)
       setPlans(p || [])
       setPayments(pay || [])
       setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
-      setPhoneSchedules(sched || [])
+      setSchedules(sched || [])
 
       // Donations made by this student's linked parent(s) — kept in a
       // completely separate fetch/table from tuition_payments so they can
@@ -1348,6 +1376,10 @@ export default function StudentTuitionPage() {
     (bfPayments.length > 0 && (bfBal?.buildingFundBalance ?? 0) <= 0.005 &&
       bfPayments.filter(p => COUNTS_AS_PAID.includes(p.status)).every(p => p.status === 'forgiven'))
 
+  const phoneSchedules = schedules.filter(s => s.purpose === 'phone_charge')
+  const tuitionSchedule = schedules.find(s => s.purpose === 'tuition' && s.status === 'active')
+  const buildingFundSchedule = schedules.find(s => s.purpose === 'building_fund' && s.status === 'active')
+
   return (
     <div className="max-w-4xl space-y-6">
       {/* Breadcrumb */}
@@ -1437,6 +1469,7 @@ export default function StudentTuitionPage() {
           ]}
           savedMethods={savedPaymentMethods}
           onCreated={load}
+          remainingBalances={bfBal ? { tuition: bfBal.tuitionBalance, building_fund: bfBal.buildingFundBalance } : undefined}
         />
       )}
       {showPhoneRecurringModal && (
@@ -1448,6 +1481,17 @@ export default function StudentTuitionPage() {
           savedMethods={savedPaymentMethods}
           defaultAmount={15}
           onCreated={load}
+        />
+      )}
+      {recalcTarget && (
+        <RecalculateScheduleModal
+          onClose={() => setRecalcTarget(null)}
+          onDone={load}
+          studentId={studentId}
+          purpose={recalcTarget.purpose}
+          purposeLabel={recalcTarget.purposeLabel}
+          schedule={recalcTarget.schedule}
+          remainingBalance={recalcTarget.remainingBalance}
         />
       )}
 
@@ -2397,6 +2441,38 @@ export default function StudentTuitionPage() {
                           {bal.totalBalance > 0 ? formatCurrency(bal.totalBalance) : 'Paid in Full'}
                         </span>
                       </p>
+                    )}
+                    {plan.id === currentPlan?.id && tuitionSchedule && scheduleNeedsRecalc(tuitionSchedule, planPayments, 'tuition') && (
+                      <div className="mt-2 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+                        <AlertCircle size={13} className="shrink-0" />
+                        <span className="flex-1">
+                          A manual tuition payment was recorded since this recurring schedule started — its {formatCurrency(tuitionSchedule.amount)}{' '}
+                          {tuitionSchedule.interval_count === 1 ? `per ${tuitionSchedule.interval_type}` : `every ${tuitionSchedule.interval_count} ${tuitionSchedule.interval_type}s`} payment
+                          may no longer match the {formatCurrency(bal.tuitionBalance)} still owed.
+                        </span>
+                        <button
+                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'tuition', purposeLabel: 'Tuition', schedule: tuitionSchedule, remainingBalance: bal.tuitionBalance }) }}
+                          className="shrink-0 font-semibold text-amber-900 hover:text-amber-950 underline"
+                        >
+                          Recalculate
+                        </button>
+                      </div>
+                    )}
+                    {plan.id === currentPlan?.id && buildingFundSchedule && scheduleNeedsRecalc(buildingFundSchedule, planPayments, 'building_fund') && (
+                      <div className="mt-2 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+                        <AlertCircle size={13} className="shrink-0" />
+                        <span className="flex-1">
+                          A manual building fund payment was recorded since this recurring schedule started — its {formatCurrency(buildingFundSchedule.amount)}{' '}
+                          {buildingFundSchedule.interval_count === 1 ? `per ${buildingFundSchedule.interval_type}` : `every ${buildingFundSchedule.interval_count} ${buildingFundSchedule.interval_type}s`} payment
+                          may no longer match the {formatCurrency(bal.buildingFundBalance)} still owed.
+                        </span>
+                        <button
+                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'building_fund', purposeLabel: 'Building Fund', schedule: buildingFundSchedule, remainingBalance: bal.buildingFundBalance }) }}
+                          className="shrink-0 font-semibold text-amber-900 hover:text-amber-950 underline"
+                        >
+                          Recalculate
+                        </button>
+                      </div>
                     )}
                     {plan.discount_amount > 0 && (
                       <p className="text-xs text-slate-400 mt-0.5">

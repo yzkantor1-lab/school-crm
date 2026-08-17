@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { createSchedule, cancelSchedule, isTestMode } from '@/lib/sola/client'
+import { createSchedule, cancelSchedule, isTestMode, listAllSchedules } from '@/lib/sola/client'
 import { resolveSolaCustomer, resolvePaymentMethod, type NewPaymentMethodInput } from '@/lib/sola/context'
 
 type ScheduleBody = {
@@ -99,6 +99,41 @@ export async function POST(req: Request) {
   if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 })
 
   return NextResponse.json({ scheduleId: scheduleRow.id, solaScheduleId: created.scheduleId, isTest: testMode })
+}
+
+// Live status of one schedule (how many of its payments Sola has actually
+// run) — used to recalculate a fixed-#-of-payments plan mid-cycle, e.g. after
+// a manual payment changes what's actually still owed. Not available from
+// local data: payment_schedules only records what we asked Sola to set up,
+// not what it's since processed on its own clock.
+export async function GET(req: Request) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'id is required.' }, { status: 400 })
+
+  const { data: schedule, error } = await supabase
+    .from('payment_schedules').select('sola_schedule_id,total_payments').eq('id', id).single()
+  if (error || !schedule) return NextResponse.json({ error: 'Schedule not found.' }, { status: 404 })
+
+  // Simulated schedules (created while test mode was on) never existed in
+  // Sola — there's nothing to look up, so report it as fully unprocessed.
+  if (schedule.sola_schedule_id.startsWith('TEST-SCHED-')) {
+    return NextResponse.json({ paymentsProcessed: 0, totalPayments: schedule.total_payments, nextScheduledRunTime: null })
+  }
+
+  const all = await listAllSchedules()
+  const live = all.find(s => s.scheduleId === schedule.sola_schedule_id)
+  if (!live) return NextResponse.json({ error: 'Schedule not found in Sola.' }, { status: 404 })
+
+  return NextResponse.json({
+    paymentsProcessed: live.paymentsProcessed ?? 0,
+    totalPayments: live.totalPayments ?? schedule.total_payments,
+    nextScheduledRunTime: live.nextScheduledRunTime ?? null,
+  })
 }
 
 export async function DELETE(req: Request) {
