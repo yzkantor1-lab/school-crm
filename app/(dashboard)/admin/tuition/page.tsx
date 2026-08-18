@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Search, GraduationCap, Plus, ChevronRight, Filter, X, UserPlus, BookOpen, CalendarDays, Users, AlertCircle } from 'lucide-react'
+import { Search, GraduationCap, Plus, ChevronRight, Filter, X, UserPlus, BookOpen, CalendarDays, Users, AlertCircle, Repeat } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
 import ExportButton from '@/components/ExportButton'
 import { SCHOOL_YEAR_SEMESTERS, currentGradeLevel } from '@/lib/semesters'
@@ -118,6 +118,7 @@ const TUITION_EXPORT_COLS = [
   { header: 'Total Paid',        key: 'totalPaid', format: (v: number) => v ? `$${v.toFixed(2)}` : '' },
   { header: 'Balance',           key: 'balance',   format: (v: number) => v ? `$${v.toFixed(2)}` : '' },
   { header: 'Status',            key: 'status' },
+  { header: 'Recurring',         key: 'recurringLabel' },
 ]
 
 type Student = {
@@ -145,6 +146,13 @@ type TuitionPlan = {
   building_fund_waived: boolean | null
 }
 
+type ActiveSchedule = {
+  purpose: string
+  amount: number
+  intervalType: string
+  intervalCount: number
+}
+
 type StudentWithTuition = Student & {
   activePlan: TuitionPlan | null
   totalPaid: number
@@ -152,6 +160,12 @@ type StudentWithTuition = Student & {
   // Positive balance sitting on an earlier academic year's plan than the one
   // being displayed — e.g. this year is paid in full but last year isn't.
   priorOutstandingAmount: number
+  // Every active Sola recurring schedule billing this student, regardless of
+  // purpose (tuition, building fund, phone charge) — not just the ones tied
+  // to a fixed-#-of-payments plan. Lets staff see at a glance whether a
+  // recurring charge was actually set up, instead of having to open each
+  // student individually to check.
+  activeSchedules: ActiveSchedule[]
   // computed for export
   activePlanYear: string
   activePlanStructure: string
@@ -184,6 +198,18 @@ type OutstandingRow = {
   bucketSortKey: number
 }
 
+const SCHEDULE_PURPOSE_LABEL: Record<string, string> = {
+  tuition: 'Tuition',
+  building_fund: 'Building Fund',
+  phone_charge: 'Phone Charge',
+}
+
+function scheduleSummary(sch: ActiveSchedule): string {
+  const label = SCHEDULE_PURPOSE_LABEL[sch.purpose] ?? sch.purpose
+  const cadence = sch.intervalCount === 1 ? `every ${sch.intervalType}` : `every ${sch.intervalCount} ${sch.intervalType}s`
+  return `${label}: ${formatCurrency(sch.amount)} ${cadence}`
+}
+
 function toExportRow(s: StudentWithTuition) {
   const buildingFund = s.activePlan?.building_fund_waived ? 0 : Number(s.activePlan?.building_fund_amount ?? 0)
   return {
@@ -194,6 +220,7 @@ function toExportRow(s: StudentWithTuition) {
     expected: s.activePlan
       ? Number(s.activePlan.total_amount ?? 0) - Number(s.activePlan.discount_amount ?? 0) + buildingFund
       : 0,
+    recurringLabel: s.activeSchedules.map(scheduleSummary).join('; '),
   }
 }
 
@@ -233,6 +260,7 @@ export default function TuitionPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'has_plan' | 'no_plan'>('all')
+  const [recurringFilter, setRecurringFilter] = useState<'all' | 'has_recurring' | 'no_recurring'>('all')
   const [showOutstandingOnly, setShowOutstandingOnly] = useState(false)
   const [enrollmentFilter, setEnrollmentFilter] = useState<StatusFilter>('current')
   const [tab, setTab] = useState<Tab>('all')
@@ -271,6 +299,7 @@ export default function TuitionPage() {
     let studentsData: Student[] | null = null
     let plans: TuitionPlan[] = []
     let payments: TuitionPayment[] = []
+    let schedules: { student_id: string; purpose: string; amount: number; interval_type: string; interval_count: number }[] = []
     try {
       // Fetched one at a time, not in parallel — running these concurrently was
       // hitting a connection cap on some networks and silently dropping the
@@ -307,6 +336,18 @@ export default function TuitionPage() {
           ['paid', 'partial', 'forgiven'].includes(pay.status) && ['tuition', 'building_fund'].includes(pay.payment_type ?? '')
         )
       )
+      // Active Sola recurring schedules — any purpose (tuition, building
+      // fund, phone charge), not just fixed-#-of-payments plans — so staff
+      // can see at a glance who actually has recurring billing running.
+      schedules = await withRetry('payment_schedules', async () => {
+        const { data, error } = await supabase
+          .from('payment_schedules')
+          .select('student_id,purpose,amount,interval_type,interval_count')
+          .eq('status', 'active')
+          .not('student_id', 'is', null)
+        if (error) throw error
+        return data || []
+      })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setDebugInfo(`Couldn't load tuition data: ${msg}`)
@@ -338,12 +379,17 @@ export default function TuitionPage() {
       const priorOutstandingAmount = sortedPlans.slice(1)
         .reduce((sum, p) => sum + Math.max(0, planExpected(p) - planPaid(p)), 0)
 
+      const activeSchedules: ActiveSchedule[] = schedules
+        .filter(sch => sch.student_id === s.id)
+        .map(sch => ({ purpose: sch.purpose, amount: Number(sch.amount), intervalType: sch.interval_type, intervalCount: sch.interval_count }))
+
       return {
         ...s,
         activePlan,
         totalPaid,
         balance,
         priorOutstandingAmount,
+        activeSchedules,
         activePlanYear: activePlan?.academic_year ?? '',
         activePlanStructure: activePlan?.payment_structure ?? '',
         expected,
@@ -463,8 +509,12 @@ export default function TuitionPage() {
       enrollmentFilter === 'all' ||
       (enrollmentFilter === 'graduated' ? s.status === 'graduated' : s.status !== 'graduated')
     const matchesOutstanding = !showOutstandingOnly || s.balance > 0 || s.priorOutstandingAmount > 0
-    return matchesSearch && matchesFilter && matchesEnrollment && matchesOutstanding
-  }), [students, search, filterStatus, enrollmentFilter, showOutstandingOnly])
+    const matchesRecurring =
+      recurringFilter === 'all' ||
+      (recurringFilter === 'has_recurring' && s.activeSchedules.length > 0) ||
+      (recurringFilter === 'no_recurring' && s.activeSchedules.length === 0)
+    return matchesSearch && matchesFilter && matchesEnrollment && matchesOutstanding && matchesRecurring
+  }), [students, search, filterStatus, enrollmentFilter, showOutstandingOnly, recurringFilter])
 
   // Group by academic year
   const byYear = useMemo(() => {
@@ -727,6 +777,15 @@ export default function TuitionPage() {
             <option value="has_plan">Has Tuition Plan</option>
             <option value="no_plan">No Tuition Plan</option>
           </select>
+          <select
+            value={recurringFilter}
+            onChange={e => setRecurringFilter(e.target.value as typeof recurringFilter)}
+            className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="all">Recurring: All</option>
+            <option value="has_recurring">Has Recurring</option>
+            <option value="no_recurring">No Recurring</option>
+          </select>
         </div>
         <ExportButton
           data={filtered.map(toExportRow)}
@@ -876,6 +935,15 @@ function TuitionTable({ students }: { students: StudentWithTuition[] }) {
                     <p className="text-xs text-slate-400">
                       {currentGradeLevel(s.grade_level, s.came_semester)}{s.student_id && ` · ${s.student_id}`}
                     </p>
+                    {s.activeSchedules.length > 0 && (
+                      <p
+                        className="inline-flex items-center gap-1 text-xs text-blue-600 font-medium mt-0.5"
+                        title={s.activeSchedules.map(scheduleSummary).join('\n')}
+                      >
+                        <Repeat size={11} />
+                        {s.activeSchedules.map(sch => SCHEDULE_PURPOSE_LABEL[sch.purpose] ?? sch.purpose).join(', ')}
+                      </p>
+                    )}
                   </div>
                 </Link>
               </td>
