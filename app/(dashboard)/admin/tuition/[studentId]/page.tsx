@@ -909,10 +909,10 @@ export default function StudentTuitionPage() {
   }
 
   // Cancels the real Sola recurring schedule (not just a local flag) — same
-  // DELETE endpoint used everywhere else a schedule gets stopped, which
-  // cancels it on Sola's side too so the card actually stops being charged.
-  async function stopPhoneCharge(scheduleId: string) {
-    if (!confirm('Stop the recurring Phone Charge? This cancels the schedule with Sola — no further monthly charges will go through until it\'s set up again.')) return
+  // DELETE endpoint used everywhere a schedule gets stopped, which cancels
+  // it on Sola's side too so the card actually stops being charged.
+  async function stopRecurringSchedule(scheduleId: string, label: string) {
+    if (!confirm(`Stop the recurring ${label}? This cancels the schedule with Sola — no further charges will go through until it's set up again.`)) return
     const res = await fetch(`/api/sola/schedule?id=${scheduleId}`, { method: 'DELETE' })
     if (!res.ok) { const json = await res.json().catch(() => ({})); alert(json.error || 'Failed to stop the recurring charge.'); return }
     load()
@@ -1720,7 +1720,7 @@ export default function StudentTuitionPage() {
               </div>
               <div className="flex items-center gap-2">
                 {activeSchedule ? (
-                  <button onClick={() => stopPhoneCharge(activeSchedule.id)}
+                  <button onClick={() => stopRecurringSchedule(activeSchedule.id, 'Phone Charge')}
                     className="flex items-center gap-1 text-xs text-slate-400 hover:text-red-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-red-50 transition-colors">
                     <Ban size={13} /> Stop Recurring Charge
                   </button>
@@ -2418,6 +2418,15 @@ export default function StudentTuitionPage() {
                       {plan.preferred_payment_method && (
                         <span>Method: <span className="text-slate-700 font-medium">{paymentMethodLabel(plan.preferred_payment_method)}</span></span>
                       )}
+                      {plan.id === currentPlan?.id && tuitionSchedule && (
+                        <span className="inline-flex items-center gap-2 text-blue-600 font-medium">
+                          <span className="inline-flex items-center gap-1"><Repeat size={12} /> {scheduleCadenceLabel(tuitionSchedule)}</span>
+                          <button onClick={e => { e.stopPropagation(); stopRecurringSchedule(tuitionSchedule.id, 'Tuition charge') }}
+                            className="text-slate-400 hover:text-red-600 font-normal underline">
+                            Stop
+                          </button>
+                        </span>
+                      )}
                     </div>
                     {(bal.buildingFund > 0 || plan.building_fund_waived) && (
                       <div className="flex items-center gap-4 mt-1 text-sm text-slate-500 flex-wrap">
@@ -2431,6 +2440,15 @@ export default function StudentTuitionPage() {
                               {bal.buildingFundBalance > 0 ? formatCurrency(bal.buildingFundBalance) : 'Paid in Full'}
                             </span></span>
                           </>
+                        )}
+                        {plan.id === currentPlan?.id && buildingFundSchedule && (
+                          <span className="inline-flex items-center gap-2 text-blue-600 font-medium">
+                            <span className="inline-flex items-center gap-1"><Repeat size={12} /> {scheduleCadenceLabel(buildingFundSchedule)}</span>
+                            <button onClick={e => { e.stopPropagation(); stopRecurringSchedule(buildingFundSchedule.id, 'Building Fund charge') }}
+                              className="text-slate-400 hover:text-red-600 font-normal underline">
+                              Stop
+                            </button>
+                          </span>
                         )}
                       </div>
                     )}
