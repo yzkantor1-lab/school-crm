@@ -31,6 +31,41 @@ export function methodLabel(methodType: 'card' | 'ach') {
   return methodType === 'ach' ? 'bank_transfer' : 'credit_card'
 }
 
+// A donation charged from a student's own tuition page still has to land on
+// a real donor record (donations.donor_id is required) — reuses an already
+// linked donor (donor_students) if one exists, or creates one on the fly
+// from the family's own info, the same "sync on first use" pattern already
+// used for Sola customers (see resolveSolaCustomer in context.ts).
+async function findOrCreateLinkedDonor(
+  supabase: AnySupabaseClient,
+  studentId: string
+): Promise<{ id: string } | { error: string }> {
+  const { data: links } = await supabase
+    .from('donor_students').select('donor_id').eq('student_id', studentId).limit(1)
+  if (links && links.length) return { id: links[0].donor_id as string }
+
+  const { data: student, error: studentError } = await supabase
+    .from('students')
+    .select('last_name,parents_title,father_name,mother_name,father_email,mother_email')
+    .eq('id', studentId)
+    .single()
+  if (studentError || !student) return { error: studentError?.message || 'Student not found' }
+
+  const name = student.parents_title
+    ? `${student.parents_title} ${student.last_name}`
+    : student.father_name || student.mother_name || `${student.last_name} Family`
+
+  const { data: donor, error: donorError } = await supabase
+    .from('donors')
+    .insert([{ name, email: student.father_email || student.mother_email || null }])
+    .select('id')
+    .single()
+  if (donorError || !donor) return { error: donorError?.message || 'Failed to create donor record' }
+
+  await supabase.from('donor_students').insert([{ donor_id: donor.id, student_id: studentId }])
+  return { id: donor.id as string }
+}
+
 // Credits an approved Sola charge into the same tables the rest of the CRM
 // already reads balances from (tuition_payments/donations/registration fee)
 // — used by both the synchronous one-time-charge route and the webhook
@@ -96,6 +131,17 @@ export async function recordApprovedCharge(
       registration_fee_status: 'paid',
       registration_fee_paid_date: today,
     }).eq('id', opts.id)
+  } else if (opts.type === 'student' && opts.purpose === 'donation') {
+    const donor = await findOrCreateLinkedDonor(supabase, opts.id)
+    if ('error' in donor) return { warning: `Charge succeeded, but couldn't attribute it to a donor record: ${donor.error} — record it manually.` }
+    await supabase.from('donations').insert([{
+      donor_id: donor.id,
+      amount: opts.amount,
+      donation_method: label,
+      donation_date: new Date().toISOString().slice(0, 10),
+      purpose: 'General',
+      notes: refNote,
+    }])
   } else if (opts.type === 'donor') {
     await supabase.from('donations').insert([{
       donor_id: opts.id,

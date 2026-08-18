@@ -1452,6 +1452,7 @@ export default function StudentTuitionPage() {
             { value: 'building_fund', label: 'Building Fund' },
             { value: 'registration_fee', label: 'Registration Fee' },
             { value: 'phone_charge', label: 'Phone Charge' },
+            { value: 'donation', label: 'Donation' },
           ]}
           savedMethods={savedPaymentMethods}
           onCharged={load}
@@ -1466,6 +1467,7 @@ export default function StudentTuitionPage() {
             { value: 'tuition', label: 'Tuition' },
             { value: 'building_fund', label: 'Building Fund' },
             { value: 'phone_charge', label: 'Phone Charge' },
+            { value: 'donation', label: 'Donation' },
           ]}
           savedMethods={savedPaymentMethods}
           onCreated={load}
