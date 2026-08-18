@@ -7,8 +7,10 @@ import { Search, Plus, X, User, Mail, Phone, MapPin, Tag, Heart, Grid3x3, List, 
 import ExportButton from '@/components/ExportButton'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
+import TitleSelect from '@/components/TitleSelect'
 
 const DONOR_EXPORT_COLS = [
+  { header: 'Title',        key: 'title' },
   { header: 'Name',         key: 'name' },
   { header: 'Email',        key: 'email' },
   { header: 'Phone',        key: 'phone_number' },
@@ -20,6 +22,7 @@ const DONOR_EXPORT_COLS = [
 
 type Donor = {
   id: string
+  title: string | null
   name: string
   email: string | null
   phone_number: string | null
@@ -44,6 +47,7 @@ export default function DonorsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [groupBy, setGroupBy] = useState<GroupBy>('none')
   const [formData, setFormData] = useState({
+    title: '',
     name: '',
     email: '',
     address: '',
@@ -88,6 +92,7 @@ export default function DonorsPage() {
   async function addDonor(e: React.FormEvent) {
     e.preventDefault()
     const { data, error } = await supabase.from('donors').insert([{
+      title: formData.title || null,
       name: formData.name,
       email: formData.email || null,
       address: formData.address || null,
@@ -102,7 +107,7 @@ export default function DonorsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'donor', id: data.id }),
     }).catch(err => console.warn('Sola customer sync failed:', err))
-    setFormData({ name: '', email: '', address: '', phone_number: '', category: donorCategories[0] || '', relationship: relationships[0] || '' })
+    setFormData({ title: '', name: '', email: '', address: '', phone_number: '', category: donorCategories[0] || '', relationship: relationships[0] || '' })
     setShowAddForm(false)
     fetchDonors()
   }
@@ -182,12 +187,20 @@ export default function DonorsPage() {
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
           <h3 className="text-lg font-semibold mb-4 text-slate-900">Add New Donor</h3>
           <form onSubmit={addDonor} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Name *</label>
-              <NameInput required value={formData.name}
-                onChange={v => setFormData({ ...formData, name: v })}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                placeholder="Full name" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Title</label>
+                <TitleSelect value={formData.title}
+                  onChange={v => setFormData({ ...formData, title: v })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Name *</label>
+                <NameInput required value={formData.name}
+                  onChange={v => setFormData({ ...formData, name: v })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  placeholder="Full name" />
+              </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -327,7 +340,7 @@ function DonorTable({ donors, onNavigate, searchTerm }: { donors: Donor[]; onNav
               <td className="px-5 py-3">
                 <div className="flex items-center gap-3">
                   <div className="bg-blue-100 p-1.5 rounded-lg"><User className="text-blue-600" size={16} /></div>
-                  <span className="font-medium text-slate-900">{donor.name}</span>
+                  <span className="font-medium text-slate-900">{donor.title ? `${donor.title} ` : ''}{donor.name}</span>
                 </div>
               </td>
               <td className="px-5 py-3 hidden md:table-cell text-slate-600">
@@ -369,7 +382,7 @@ function DonorCard({ donor, onClick }: { donor: Donor; onClick: () => void }) {
       <div className="flex items-start gap-3">
         <div className="bg-blue-100 p-2 rounded-lg"><User className="text-blue-600" size={20} /></div>
         <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-slate-900 truncate">{donor.name}</h3>
+          <h3 className="font-semibold text-slate-900 truncate">{donor.title ? `${donor.title} ` : ''}{donor.name}</h3>
           <div className="flex gap-2 mt-1.5 mb-2 flex-wrap">
             {donor.category && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-medium">

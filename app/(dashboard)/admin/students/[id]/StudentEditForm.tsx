@@ -40,7 +40,6 @@ const CONTACT_FIELDS = [
 ]
 
 const PARENT_FIELDS = [
-  field('Parents Title', 'parents_title'),
   field('Father Name', 'father_name'),
   field('Father Cell', 'father_cell'),
   field('Father Email', 'father_email'),
@@ -337,10 +336,46 @@ function GrandparentSection({
   maritalStatusKey?: string
 }) {
   const grandparentsLastName = form[`${prefix}_grandparents_last_name`] ?? ''
+  // Step grandparent groups have no marital status tracked (always presumed
+  // a couple), so only the blood paternal/maternal groups ever split into
+  // separate per-person titles — same reasoning as the Parents section above.
+  const notMarried = !!maritalStatusKey && !!form[maritalStatusKey] && form[maritalStatusKey] !== 'Married'
   return (
     <div className="border-t border-slate-100 pt-4">
       <h2 className="font-semibold text-slate-900 mb-3">{title}</h2>
       <div className="space-y-3">
+        {notMarried ? (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Grandfather&apos;s Title</label>
+              <SmartFormField
+                fieldKey={`${prefix}_grandfather_title`}
+                value={form[`${prefix}_grandfather_title`] ?? ''}
+                onChange={v => set(`${prefix}_grandfather_title`, v)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Grandmother&apos;s Title</label>
+              <SmartFormField
+                fieldKey={`${prefix}_grandmother_title`}
+                value={form[`${prefix}_grandmother_title`] ?? ''}
+                onChange={v => set(`${prefix}_grandmother_title`, v)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+        ) : (
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Title</label>
+            <SmartFormField
+              fieldKey={`${prefix}_grandparents_title`}
+              value={form[`${prefix}_grandparents_title`] ?? ''}
+              onChange={v => set(`${prefix}_grandparents_title`, v)}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        )}
         {GRANDPARENT_NAME_FIELDS(prefix).map(([label, key, type]) => (
           <div key={key}>
             <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
@@ -610,6 +645,38 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
       <div className="border-t border-slate-100 pt-4">
         <h2 className="font-semibold text-slate-900 mb-3">Parents</h2>
         <div className="space-y-3">
+          {parentsNotMarried ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Father&apos;s Title</label>
+                <SmartFormField
+                  fieldKey="father_title"
+                  value={form.father_title ?? ''}
+                  onChange={v => set('father_title', v)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Mother&apos;s Title</label>
+                <SmartFormField
+                  fieldKey="mother_title"
+                  value={form.mother_title ?? ''}
+                  onChange={v => set('mother_title', v)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Parents Title</label>
+              <SmartFormField
+                fieldKey="parents_title"
+                value={form.parents_title ?? ''}
+                onChange={v => set('parents_title', v)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          )}
           {PARENT_FIELDS.map(({ label, key }) => (
             <div key={key}>
               <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>

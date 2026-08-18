@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 
-const TITLE_PRESETS = ['Rabbi & Mrs.', 'Mr. & Mrs.', 'Dr. & Mrs.', 'Mr. & Dr.', 'Rabbi', 'Dr.', 'Mr.', 'Mrs.']
+const TITLE_PRESETS = ['Rabbi & Mrs.', 'Mr. & Mrs.', 'Dr. & Mrs.', 'Mr. & Dr.', 'Rabbi', 'Dr.', 'Mr.', 'Mrs.', 'Ms.']
 
 export default function TitleSelect({
   value, onChange, className,

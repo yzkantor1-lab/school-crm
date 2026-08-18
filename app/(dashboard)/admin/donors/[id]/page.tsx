@@ -19,9 +19,10 @@ import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
+import TitleSelect from '@/components/TitleSelect'
 
 type Donor = {
-  id: string; name: string; email: string | null; phone_number: string | null
+  id: string; title: string | null; name: string; email: string | null; phone_number: string | null
   address: string | null; category: string | null; relationship: string | null
 }
 type Donation = {
@@ -57,7 +58,7 @@ export default function DonorDetailPage() {
   const [isEditingDonor, setIsEditingDonor] = useState(false)
   const [editingDonationId, setEditingDonationId] = useState<string | null>(null)
   const [showArchived, setShowArchived] = useState(false)
-  const [donorForm, setDonorForm] = useState({ name: '', email: '', phone_number: '', address: '', category: '', relationship: '' })
+  const [donorForm, setDonorForm] = useState({ title: '', name: '', email: '', phone_number: '', address: '', category: '', relationship: '' })
   const [donationForm, setDonationForm] = useState({ amount: '', donation_method: '', donation_date: '', purpose: '', notes: '', category: 'one_time', event_id: '' })
   const [emailModal, setEmailModal] = useState<{
     defaultRecipients: string[]
@@ -101,7 +102,7 @@ export default function DonorDetailPage() {
     setLinkedStudents(((ds ?? []) as unknown as { students: LinkedStudent }[]).map(r => r.students).filter(Boolean))
     if (d) {
       setDonor(d)
-      setDonorForm({ name: d.name, email: d.email || '', phone_number: d.phone_number || '', address: d.address || '', category: d.category || 'General', relationship: d.relationship || 'Other' })
+      setDonorForm({ title: d.title || '', name: d.name, email: d.email || '', phone_number: d.phone_number || '', address: d.address || '', category: d.category || 'General', relationship: d.relationship || 'Other' })
     }
     setDonations((dn ?? []) as unknown as Donation[])
     setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
@@ -147,7 +148,7 @@ export default function DonorDetailPage() {
   async function updateDonor() {
     if (!donor) return
     const { error } = await supabase.from('donors').update({
-      name: donorForm.name, email: donorForm.email || null, phone_number: donorForm.phone_number || null,
+      title: donorForm.title || null, name: donorForm.name, email: donorForm.email || null, phone_number: donorForm.phone_number || null,
       address: donorForm.address || null, category: donorForm.category, relationship: donorForm.relationship,
     }).eq('id', donor.id)
     if (error) { alert('Error updating donor.'); return }
@@ -258,7 +259,7 @@ export default function DonorDetailPage() {
           <div className="flex items-center gap-3">
             <div className="bg-blue-100 p-3 rounded-xl"><User className="text-blue-600" size={24} /></div>
             <div>
-              <h2 className="text-xl font-bold text-slate-900">{donor.name}</h2>
+              <h2 className="text-xl font-bold text-slate-900">{donor.title ? `${donor.title} ` : ''}{donor.name}</h2>
               <div className="flex gap-2 mt-1 flex-wrap">
                 {donor.category && <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-medium"><Tag size={10} />{donor.category}</span>}
                 {donor.relationship && <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-medium"><Heart size={10} />{donor.relationship}</span>}
@@ -284,8 +285,12 @@ export default function DonorDetailPage() {
 
         {isEditingDonor ? (
           <div className="space-y-3 mt-4">
-            <NameInput required value={donorForm.name} onChange={v => setDonorForm({ ...donorForm, name: v })}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Name *" />
+            <div className="grid grid-cols-2 gap-3">
+              <TitleSelect value={donorForm.title} onChange={v => setDonorForm({ ...donorForm, title: v })}
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+              <NameInput required value={donorForm.name} onChange={v => setDonorForm({ ...donorForm, name: v })}
+                className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Name *" />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <input type="email" value={donorForm.email} onChange={e => setDonorForm({ ...donorForm, email: e.target.value })}
                 className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Email" />
