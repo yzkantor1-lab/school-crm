@@ -20,6 +20,7 @@ import RecurringModal from '@/components/sola/RecurringModal'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
 import TitleSelect from '@/components/TitleSelect'
+import EmailInput from '@/components/EmailInput'
 
 type Donor = {
   id: string; title: string | null; name: string; email: string | null; phone_number: string | null
@@ -292,7 +293,7 @@ export default function DonorDetailPage() {
                 className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Name *" />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <input type="email" value={donorForm.email} onChange={e => setDonorForm({ ...donorForm, email: e.target.value })}
+              <EmailInput value={donorForm.email} onChange={v => setDonorForm({ ...donorForm, email: v })}
                 className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Email" />
               <PhoneInput value={donorForm.phone_number} onChange={v => setDonorForm({ ...donorForm, phone_number: v })}
                 className="px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="Phone" />

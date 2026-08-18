@@ -7,6 +7,7 @@ import {
   CheckCircle, XCircle, Plus, Edit2, Trash2, Search, UserPlus,
   DollarSign, ArrowUpDown, ArrowUp, ArrowDown, Filter, X
 } from 'lucide-react'
+import EmailInput from '@/components/EmailInput'
 
 type Donor = { id: string; name: string }
 type Pledge = {
@@ -357,7 +358,7 @@ export default function PledgesPage() {
                       <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-1.5"><UserPlus size={14} />New Donor</h3>
                       <input type="text" value={newDonorData.name} onChange={e => setNewDonorData({ ...newDonorData, name: e.target.value })}
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="Full name *" />
-                      <input type="email" value={newDonorData.email} onChange={e => setNewDonorData({ ...newDonorData, email: e.target.value })}
+                      <EmailInput value={newDonorData.email} onChange={v => setNewDonorData({ ...newDonorData, email: v })}
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="Email" />
                       <input type="tel" value={newDonorData.phone_number} onChange={e => setNewDonorData({ ...newDonorData, phone_number: e.target.value })}
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="Phone" />

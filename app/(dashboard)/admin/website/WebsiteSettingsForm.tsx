@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import EmailInput from '@/components/EmailInput'
 
 export default function WebsiteSettingsForm({ settings }: { settings: Record<string, string> }) {
   const [form, setForm] = useState(settings)
@@ -39,12 +40,20 @@ export default function WebsiteSettingsForm({ settings }: { settings: Record<str
       {fields.map(({ key, label, type }) => (
         <div key={key}>
           <label className="block text-xs font-medium text-slate-500 mb-1">{label}</label>
-          <input
-            type={type || 'text'}
-            value={form[key] ?? ''}
-            onChange={e => set(key, e.target.value)}
-            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+          {type === 'email' ? (
+            <EmailInput
+              value={form[key] ?? ''}
+              onChange={v => set(key, v)}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          ) : (
+            <input
+              type="text"
+              value={form[key] ?? ''}
+              onChange={e => set(key, e.target.value)}
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          )}
         </div>
       ))}
       <button

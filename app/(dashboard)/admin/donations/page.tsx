@@ -8,6 +8,7 @@ import { formatCurrency } from '@/lib/currency'
 import { DollarSign, Calendar, CreditCard, FileText, UserPlus, X, AlertTriangle, PartyPopper, Repeat } from 'lucide-react'
 import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
+import EmailInput from '@/components/EmailInput'
 
 type Donor = { id: string; name: string; email: string | null }
 type StudentParent = { id: string; first_name: string; last_name: string; father_name: string | null; mother_name: string | null }
@@ -207,7 +208,7 @@ export default function DonationsPage() {
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <input type="email" value={newDonorData.email} onChange={e => setNewDonorData({ ...newDonorData, email: e.target.value })}
+                <EmailInput value={newDonorData.email} onChange={v => setNewDonorData({ ...newDonorData, email: v })}
                   className="px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="Email" />
                 <input type="tel" value={newDonorData.phone_number} onChange={e => setNewDonorData({ ...newDonorData, phone_number: e.target.value })}
                   className="px-3 py-2 border border-slate-300 rounded-lg text-sm" placeholder="Phone" />
