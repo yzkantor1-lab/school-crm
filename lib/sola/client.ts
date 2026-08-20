@@ -166,7 +166,10 @@ type SolaRawSchedule = {
   Custom02?: string
 }
 
-async function getScheduleRaw(scheduleId: string): Promise<SolaRawSchedule | null> {
+// Exported so callers that need to read a live schedule's own fields (e.g.
+// the Sola Sync "promote to recurring" route, which builds a local
+// payment_schedules row from them) don't have to duplicate this pagination.
+export async function getScheduleRaw(scheduleId: string): Promise<SolaRawSchedule | null> {
   type Raw = SolaListResponse & { Schedules?: SolaRawSchedule[] }
   let nextToken = ''
   do {
@@ -179,20 +182,13 @@ async function getScheduleRaw(scheduleId: string): Promise<SolaRawSchedule | nul
   return null
 }
 
-// Stops future occurrences of a schedule. Not gated by test mode itself —
-// callers only ever cancel schedules that exist (either a real one from live
-// mode, or one that was never actually created in Sola because it was
-// simulated — see the schedule cancellation route for that distinction).
-export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateScheduleResult> {
+// Shared by cancelSchedule/tagScheduleCustom02 below: fetches the schedule's
+// current field values and resends them alongside whatever's overridden, so
+// a single-purpose update (stop it / tag it) can't accidentally blank out
+// every other field via UpdateSchedule's full-replace semantics.
+async function replaceSchedule(scheduleId: string, overrides: Record<string, unknown>): Promise<SolaUpdateScheduleResult> {
   const current = await getScheduleRaw(scheduleId)
   if (!current) return { ok: false, error: 'Schedule not found in Sola' }
-
-  // EndDate must be strictly in the future ("xExpireDate must be in the
-  // future") — today is rejected even for a schedule that already ran today,
-  // so tomorrow is the earliest valid stop point. Today's already-processed
-  // charge (if any) is unaffected either way.
-  const tomorrow = new Date()
-  tomorrow.setDate(tomorrow.getDate() + 1)
 
   const json = await solaRequest('/UpdateSchedule', {
     ScheduleId: scheduleId,
@@ -207,10 +203,33 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
     FailedTransactionRetryTimes: current.FailedTransactionRetryTimes,
     DaysBetweenRetries: current.DaysBetweenRetries,
     Custom02: current.Custom02,
-    EndDate: tomorrow.toISOString().slice(0, 10),
+    ...overrides,
   })
   if (json.Result === 'S') return { ok: true }
-  return { ok: false, error: json.Error || 'Failed to cancel schedule' }
+  return { ok: false, error: json.Error || 'Failed to update schedule' }
+}
+
+// Stops future occurrences of a schedule. Not gated by test mode itself —
+// callers only ever cancel schedules that exist (either a real one from live
+// mode, or one that was never actually created in Sola because it was
+// simulated — see the schedule cancellation route for that distinction).
+export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateScheduleResult> {
+  // EndDate must be strictly in the future ("xExpireDate must be in the
+  // future") — today is rejected even for a schedule that already ran today,
+  // so tomorrow is the earliest valid stop point. Today's already-processed
+  // charge (if any) is unaffected either way.
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  return replaceSchedule(scheduleId, { EndDate: tomorrow.toISOString().slice(0, 10) })
+}
+
+// Stamps Custom02 onto a Sola-native schedule — one created directly in
+// Sola's own dashboard, outside the CRM, so it never got the {type,id,purpose}
+// tag CreateSchedule attaches (app/api/sola/schedule/route.ts). Lets a
+// schedule staff link after the fact via Sola Sync still get real-time
+// webhook attribution for future charges. See promote-schedule/route.ts.
+export async function tagScheduleCustom02(scheduleId: string, custom02: string): Promise<SolaUpdateScheduleResult> {
+  return replaceSchedule(scheduleId, { Custom02: custom02 })
 }
 
 // ── Sola Sync (read-only history pull) ──────────────────────────────────────

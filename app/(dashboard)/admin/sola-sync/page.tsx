@@ -29,6 +29,8 @@ type SyncCustomer = {
   donor_match_method: string | null
   suggested_donor_student_id: string | null
   last_synced_at: string
+  default_purpose: DefaultPurpose | null
+  default_donation_category: DonationCategory | null
 }
 
 type SyncSchedule = {
@@ -42,12 +44,16 @@ type SyncSchedule = {
   total_payments: number | null
   payments_processed: number | null
   next_scheduled_date: string | null
+  default_purpose: DefaultPurpose | null
+  default_donation_category: DonationCategory | null
+  linked_payment_schedule_id: string | null
 }
 
 type ImportStatus = 'pending' | 'duplicate' | 'imported' | 'skipped' | 'needs_review'
 type FeeType = 'tuition' | 'building_fund' | 'registration_fee'
 type DonationCategory = 'monthly_recurring' | 'one_time' | 'event'
 type ChargeKind = 'tuition' | 'donation' | 'ambiguous'
+type DefaultPurpose = 'tuition' | 'building_fund' | 'registration_fee' | 'donation'
 
 type SyncPayment = {
   id: string
@@ -276,6 +282,37 @@ export default function SolaSyncPage() {
         body: JSON.stringify({ syncCustomerId, action, donorId }),
       })
       if (!res.ok) { const j = await res.json().catch(() => null); alert(j?.error || 'Action failed.'); return }
+      await load()
+    } finally { setBusyId(null) }
+  }
+
+  // Sets the default categorization Sola Sync applies to newly-staged
+  // payments for this customer/schedule going forward — never touches
+  // payments already staged (see classificationFromDefault in
+  // app/api/sola/sync/run/route.ts).
+  async function setDefault(target: 'customer' | 'schedule', id: string, purpose: DefaultPurpose | null, donationCategory?: DonationCategory | null) {
+    setBusyId(id)
+    try {
+      const res = await fetch('/api/sola/sync/set-default', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, id, purpose, donationCategory }),
+      })
+      if (!res.ok) { const j = await res.json().catch(() => null); alert(j?.error || 'Failed to set default.'); return }
+      await load()
+    } finally { setBusyId(null) }
+  }
+
+  // "Track as Recurring": tags the live Sola schedule's Custom02 (for future
+  // webhook attribution) and mirrors it into payment_schedules so it shows
+  // on the student's tuition page like a CRM-created recurring plan.
+  async function promoteSchedule(syncScheduleId: string) {
+    setBusyId(syncScheduleId)
+    try {
+      const res = await fetch('/api/sola/sync/promote-schedule', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ syncScheduleId }),
+      })
+      if (!res.ok) { const j = await res.json().catch(() => null); alert(j?.error || 'Failed to track as recurring.'); return }
       await load()
     } finally { setBusyId(null) }
   }
@@ -565,18 +602,52 @@ export default function SolaSyncPage() {
                       <div>
                         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Sola Schedules</p>
                         <div className="space-y-1.5">
-                          {customerSchedules.map(s => (
-                            <div key={s.id} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2 text-xs">
-                              <div>
-                                <span className="font-medium text-slate-700">{s.description || 'Schedule'}</span>
-                                <span className="text-slate-400 ml-2">{s.interval_type ? `${formatCurrency(Number(s.amount ?? 0))} / ${s.interval_type}` : formatCurrency(Number(s.amount ?? 0))}</span>
+                          {customerSchedules.map(s => {
+                            const scheduleBusy = busyId === s.id
+                            return (
+                              <div key={s.id} className="bg-slate-50 rounded-lg px-3 py-2 text-xs space-y-1.5">
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                  <div>
+                                    <span className="font-medium text-slate-700">{s.description || 'Schedule'}</span>
+                                    <span className="text-slate-400 ml-2">{s.interval_type ? `${formatCurrency(Number(s.amount ?? 0))} / ${s.interval_type}` : formatCurrency(Number(s.amount ?? 0))}</span>
+                                  </div>
+                                  <span className="text-slate-500">
+                                    {s.payments_processed ?? 0}{s.total_payments ? ` of ${s.total_payments}` : ''} paid
+                                    {s.next_scheduled_date && ` · next ${new Date(s.next_scheduled_date + 'T00:00:00').toLocaleDateString()}`}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 flex-wrap pt-1.5 border-t border-slate-200/70">
+                                  <span className="text-[10px] uppercase tracking-wide text-slate-400">Future charges on this schedule</span>
+                                  <select disabled={scheduleBusy} value={s.default_purpose ?? ''}
+                                    onChange={e => setDefault('schedule', s.id, (e.target.value || null) as DefaultPurpose | null, s.default_donation_category ?? 'monthly_recurring')}
+                                    className="border border-slate-200 rounded px-1.5 py-0.5 text-xs bg-white disabled:opacity-50">
+                                    <option value="">— classify automatically —</option>
+                                    <option value="tuition">Tuition</option>
+                                    <option value="building_fund">Building Fund</option>
+                                    <option value="registration_fee">Registration Fee</option>
+                                    <option value="donation">Donation</option>
+                                  </select>
+                                  {s.default_purpose === 'donation' && (
+                                    <select disabled={scheduleBusy} value={s.default_donation_category ?? 'monthly_recurring'}
+                                      onChange={e => setDefault('schedule', s.id, 'donation', e.target.value as DonationCategory)}
+                                      className="border border-slate-200 rounded px-1.5 py-0.5 text-xs bg-white disabled:opacity-50">
+                                      <option value="monthly_recurring">Monthly Recurring</option>
+                                      <option value="one_time">One-Time</option>
+                                      <option value="event">Event</option>
+                                    </select>
+                                  )}
+                                  {s.linked_payment_schedule_id ? (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">✓ Tracked as recurring</span>
+                                  ) : s.default_purpose && s.default_purpose !== 'registration_fee' ? (
+                                    <button disabled={scheduleBusy} onClick={() => promoteSchedule(s.id)}
+                                      className="text-[10px] text-blue-600 hover:text-blue-700 font-medium px-1.5 py-0.5 rounded hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                                      Track as Recurring
+                                    </button>
+                                  ) : null}
+                                </div>
                               </div>
-                              <span className="text-slate-500">
-                                {s.payments_processed ?? 0}{s.total_payments ? ` of ${s.total_payments}` : ''} paid
-                                {s.next_scheduled_date && ` · next ${new Date(s.next_scheduled_date + 'T00:00:00').toLocaleDateString()}`}
-                              </span>
-                            </div>
-                          ))}
+                            )
+                          })}
                         </div>
                       </div>
                     )}
@@ -599,8 +670,30 @@ export default function SolaSyncPage() {
 
                     {/* Payments */}
                     <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Sola Payments</p>
+                      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Sola Payments</p>
+                          <span className="text-slate-300">·</span>
+                          <span className="text-[10px] uppercase tracking-wide text-slate-400">Default for one-off charges (no schedule)</span>
+                          <select disabled={isBusy} value={c.default_purpose ?? ''}
+                            onChange={e => setDefault('customer', c.id, (e.target.value || null) as DefaultPurpose | null, c.default_donation_category ?? 'one_time')}
+                            className="border border-slate-200 rounded px-1.5 py-0.5 text-xs disabled:opacity-50">
+                            <option value="">— classify automatically —</option>
+                            <option value="tuition">Tuition</option>
+                            <option value="building_fund">Building Fund</option>
+                            <option value="registration_fee">Registration Fee</option>
+                            <option value="donation">Donation</option>
+                          </select>
+                          {c.default_purpose === 'donation' && (
+                            <select disabled={isBusy} value={c.default_donation_category ?? 'one_time'}
+                              onChange={e => setDefault('customer', c.id, 'donation', e.target.value as DonationCategory)}
+                              className="border border-slate-200 rounded px-1.5 py-0.5 text-xs disabled:opacity-50">
+                              <option value="one_time">One-Time</option>
+                              <option value="monthly_recurring">Monthly Recurring</option>
+                              <option value="event">Event</option>
+                            </select>
+                          )}
+                        </div>
                         {(pendingTuitionCount + pendingDonationCount) > 0 && (
                           <button disabled={isBusy} onClick={() => importPayments(c.id, c, customerPayments)}
                             className="text-xs bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white px-2.5 py-1 rounded-lg font-medium transition-colors">

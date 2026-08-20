@@ -183,11 +183,12 @@ export async function POST() {
 
   // Re-fetch so we have local uuids for every sola_sync_customers row (both
   // pre-existing and just-inserted) to attach schedules/payments to.
-  const allSyncCustomers = await selectAll<{ id: string; sola_customer_id: string }>(
-    (sb, from, to) => sb.from('sola_sync_customers').select('id,sola_customer_id').range(from, to),
+  const allSyncCustomers = await selectAll<{ id: string; sola_customer_id: string; default_purpose: string | null; default_donation_category: string | null }>(
+    (sb, from, to) => sb.from('sola_sync_customers').select('id,sola_customer_id,default_purpose,default_donation_category').range(from, to),
     supabase
   )
   const syncCustomerIdBySolaId = new Map(allSyncCustomers.map(r => [r.sola_customer_id, r.id]))
+  const customerDefaultsById = new Map(allSyncCustomers.map(r => [r.id, { purpose: r.default_purpose, category: r.default_donation_category }]))
 
   // ── Schedules: always refresh — PaymentsProcessed/status legitimately
   // change over time in Sola, unlike customer match state. ────────────────
@@ -207,11 +208,26 @@ export async function POST() {
   // Amount is inferred from the parent schedule (Sola exposes no per-
   // transaction amount at all). Declined/errored transactions are staged
   // but auto-skipped — they never represent money actually received. ─────
-  const allSyncSchedules = await selectAll<{ id: string; sola_schedule_id: string }>(
-    (sb, from, to) => sb.from('sola_sync_schedules').select('id,sola_schedule_id').range(from, to),
+  const allSyncSchedules = await selectAll<{ id: string; sola_schedule_id: string; default_purpose: string | null; default_donation_category: string | null }>(
+    (sb, from, to) => sb.from('sola_sync_schedules').select('id,sola_schedule_id,default_purpose,default_donation_category').range(from, to),
     supabase
   )
   const syncScheduleIdBySolaId = new Map(allSyncSchedules.map(r => [r.sola_schedule_id, r.id]))
+  const scheduleDefaultsById = new Map(allSyncSchedules.map(r => [r.id, { purpose: r.default_purpose, category: r.default_donation_category }]))
+
+  // A staff-set default (via /api/sola/sync/set-default) overrides the
+  // keyword-heuristic classifyCharge for any payment newly staged after the
+  // default was set — schedule-level wins over customer-level, since one
+  // customer can have both a tuition schedule and a donation schedule.
+  // Never re-classifies a payment already staged: this only runs inside the
+  // "new transactions" branch below.
+  function classificationFromDefault(purpose: string | null, category: string | null) {
+    if (purpose === 'donation') return { chargeKind: 'donation' as const, suggestedFeeType: null, suggestedDonationCategory: (category as 'monthly_recurring' | 'one_time' | 'event' | null) ?? 'one_time' }
+    if (purpose === 'tuition' || purpose === 'building_fund' || purpose === 'registration_fee') {
+      return { chargeKind: 'tuition' as const, suggestedFeeType: purpose as 'tuition' | 'building_fund' | 'registration_fee', suggestedDonationCategory: null }
+    }
+    return null
+  }
   const existingSyncPayments = await selectAll<{ sola_transaction_id: string }>(
     (sb, from, to) => sb.from('sola_sync_payments').select('sola_transaction_id').range(from, to),
     supabase
@@ -226,14 +242,20 @@ export async function POST() {
     const schedule: SolaSchedule | undefined = t.scheduleId ? scheduleById.get(t.scheduleId) : undefined
     const amount = schedule?.amount ?? null
     const approved = t.gatewayStatus === 'Approved'
+    const localScheduleId = t.scheduleId ? (syncScheduleIdBySolaId.get(t.scheduleId) ?? null) : null
+    const scheduleDefault = localScheduleId ? scheduleDefaultsById.get(localScheduleId) : undefined
+    const customerDefault = customerDefaultsById.get(syncCustomerId)
     // Classification reflects the real charge regardless of approval status
     // — only import eligibility (below) depends on approved, so a declined
     // "Donation x6" charge still shows as a donation in the review UI
     // instead of a misleading placeholder, even though it's auto-skipped.
-    const { chargeKind, suggestedFeeType, suggestedDonationCategory } = classifyCharge(schedule, amount)
+    const { chargeKind, suggestedFeeType, suggestedDonationCategory } =
+      (scheduleDefault && classificationFromDefault(scheduleDefault.purpose, scheduleDefault.category))
+      || (customerDefault && classificationFromDefault(customerDefault.purpose, customerDefault.category))
+      || classifyCharge(schedule, amount)
     newPaymentRows.push({
       sola_sync_customer_id: syncCustomerId,
-      sola_sync_schedule_id: t.scheduleId ? (syncScheduleIdBySolaId.get(t.scheduleId) ?? null) : null,
+      sola_sync_schedule_id: localScheduleId,
       sola_transaction_id: t.transactionId,
       amount,
       transaction_date: t.transactionDate ? t.transactionDate.slice(0, 10) : null,
