@@ -134,19 +134,29 @@ export default function CashFlowPage() {
         return q
       })
 
-      const tuitionRows = await selectAll<{
-        id: string; amount: number; payment_date: string; payment_type: string
-        students: { id: string; first_name: string; last_name: string } | null
-      }>((from, to) => {
-        let q = supabase.from('tuition_payments')
-          .select('id, amount, payment_date, payment_type, students(id, first_name, last_name)')
-          .in('status', ['paid', 'partial'])
-          .not('payment_date', 'is', null)
+      // Fetched as a nested embed on students, not a standalone
+      // tuition_payments request — some school network filters block any
+      // direct request to that resource outright (confirmed live on the
+      // student tuition page), so payments only reliably arrive piggybacked
+      // on a request whose primary resource is something else. Embedding
+      // under students (not tuition_plans) matters here specifically:
+      // registration-fee payments have no tuition_plan_id at all, so they'd
+      // silently vanish from this report if plans were the parent instead.
+      const studentPaymentRows = await selectAll<{
+        id: string; first_name: string; last_name: string
+        tuition_payments: { id: string; amount: number; payment_date: string | null; payment_type: string; status: string }[] | null
+      }>((from, to) =>
+        supabase.from('students')
+          .select('id, first_name, last_name, tuition_payments(id, amount, payment_date, payment_type, status)')
           .order('id', { ascending: true })
           .range(from, to)
-        if (startDate) q = q.gte('payment_date', startDate)
-        if (endDate) q = q.lte('payment_date', endDate)
-        return q
+      )
+      const tuitionRows = studentPaymentRows.flatMap(s => {
+        const student = { id: s.id, first_name: s.first_name, last_name: s.last_name }
+        return (s.tuition_payments || [])
+          .filter(t => ['paid', 'partial'].includes(t.status) && t.payment_date != null)
+          .filter(t => (!startDate || t.payment_date! >= startDate) && (!endDate || t.payment_date! <= endDate))
+          .map(t => ({ id: t.id, amount: t.amount, payment_date: t.payment_date as string, payment_type: t.payment_type, students: student }))
       })
 
       const expenseRows = await selectAll<{

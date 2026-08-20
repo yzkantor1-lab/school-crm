@@ -31,12 +31,18 @@ export default function TuitionSection({ studentId }: { studentId: string }) {
 
   useEffect(() => {
     async function load() {
-      const [{ data: p }, { data: pay }] = await Promise.all([
-        supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
-        supabase.from('tuition_payments').select('id,tuition_plan_id,amount,status').eq('student_id', studentId).in('status', ['paid', 'partial', 'forgiven']),
-      ])
+      // Fetched as a nested embed on tuition_plans, not a standalone
+      // tuition_payments request — some school network filters block any
+      // direct request to that resource outright (confirmed live; see the
+      // student tuition page's load()), so payments only reliably arrive
+      // piggybacked on a request whose primary resource is tuition_plans.
+      const { data: p } = await supabase
+        .from('tuition_plans')
+        .select('*, tuition_payments(id,tuition_plan_id,amount,status)')
+        .eq('student_id', studentId)
+        .order('created_at', { ascending: false })
       setPlans(p || [])
-      setPayments(pay || [])
+      setPayments((p || []).flatMap(plan => (plan.tuition_payments || []) as TuitionPayment[]).filter(pay => ['paid', 'partial', 'forgiven'].includes(pay.status)))
       setLoading(false)
     }
     load()

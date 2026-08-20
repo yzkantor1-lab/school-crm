@@ -206,8 +206,13 @@ export default function SolaSyncPage() {
     setTuitionPlans(tp ?? [])
 
     const matchedStudentIds = (sc ?? []).map(c => c.matched_student_id).filter((id): id is string => !!id)
+    // Embedded on students rather than queried directly against
+    // tuition_payments — some school network filters block any direct
+    // request to that resource outright (confirmed live on the student
+    // tuition page).
     setExistingPayments(matchedStudentIds.length
-      ? (await supabase.from('tuition_payments').select('student_id,amount').in('student_id', matchedStudentIds)).data ?? []
+      ? ((await supabase.from('students').select('id, tuition_payments(amount)').in('id', matchedStudentIds)).data ?? [])
+          .flatMap(s => ((s.tuition_payments ?? []) as { amount: number }[]).map(p => ({ student_id: s.id, amount: p.amount })))
       : [])
     const matchedDonorIds = (sc ?? []).map(c => c.matched_donor_id).filter((id): id is string => !!id)
     setExistingDonations(matchedDonorIds.length

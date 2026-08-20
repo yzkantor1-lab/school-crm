@@ -846,31 +846,41 @@ export default function StudentTuitionPage() {
   const load = useCallback(async () => {
     setLoadError(false)
     try {
+      // tuition_payments is fetched as a nested embed on students, not a
+      // standalone request — confirmed live that some school network content
+      // filters block any direct request to that resource outright (a
+      // "TypeError: Failed to fetch" that leaves `payments` looking like an
+      // empty-but-successful result, silently rendering a fully-paid plan as
+      // if nothing had ever been paid). Piggybacking on the students request
+      // reuses the exact same workaround already proven on the Tuition list
+      // page (see git history: "Eliminate the separate tuition-payments
+      // endpoint entirely").
       const [
-        { data: s, error: sErr }, { data: p, error: pErr }, { data: pay, error: payErr },
+        { data: s, error: sErr }, { data: p, error: pErr },
         { data: pm, error: pmErr }, { data: ds, error: dsErr }, { data: sched, error: schedErr },
       ] = await Promise.all([
-        supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title,registration_fee_status,registration_fee_amount,registration_fee_paid_date').eq('id', studentId).single(),
+        supabase.from('students')
+          .select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title,registration_fee_status,registration_fee_amount,registration_fee_paid_date,tuition_payments(*)')
+          .eq('id', studentId).single(),
         supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
-        supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
         supabase.from('payment_methods').select('id,label').eq('student_id', studentId).order('created_at', { ascending: false }),
         supabase.from('donor_students').select('donor_id').eq('student_id', studentId),
         supabase.from('payment_schedules').select('id,status,amount,start_date,interval_type,interval_count,purpose,total_payments,payment_method_id,created_at')
           .eq('student_id', studentId).order('created_at', { ascending: false }),
       ])
       const warnings: string[] = []
-      if (sErr) warnings.push(`Student record: ${sErr.message}`)
+      if (sErr) warnings.push(`Student record (incl. tuition payments): ${sErr.message}`)
       if (pErr) warnings.push(`Tuition plans: ${pErr.message}`)
-      if (payErr) warnings.push(`Tuition payments: ${payErr.message}`)
       if (pmErr) warnings.push(`Payment methods: ${pmErr.message}`)
       if (dsErr) warnings.push(`Linked donors: ${dsErr.message}`)
       if (schedErr) warnings.push(`Recurring schedules: ${schedErr.message}`)
       setDataWarnings(warnings)
       if (warnings.length) console.error('Tuition page partial load failure:', warnings)
 
-      setStudent(s)
+      const { tuition_payments, ...studentFields } = (s ?? {}) as typeof s & { tuition_payments?: TuitionPayment[] }
+      setStudent(s ? studentFields : null)
       setPlans(p || [])
-      setPayments(pay || [])
+      setPayments((tuition_payments || []).slice().sort((a, b) => (a.due_date || '').localeCompare(b.due_date || '')))
       setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
       setSchedules(sched || [])
 
