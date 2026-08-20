@@ -143,14 +143,71 @@ export async function createSchedule(input: SolaScheduleInput): Promise<SolaCrea
   return { ok: false, error: json.Error || 'Failed to create schedule' }
 }
 
+// UpdateSchedule is a full-replace API — per docs.solapayments.com/api/recurring,
+// "any fields that are not set will use the default values (or if no default
+// is indicated, they will be removed)." Revision, StartDate, and
+// CalendarCulture in particular have no usable default and are rejected as
+// "Missing"/"Invalid" if omitted, even though the docs list them as optional.
+// So cancelling has to round-trip the schedule's own current field values
+// (fetched fresh, since Revision is optimistic-concurrency-checked) rather
+// than just sending ScheduleId + EndDate.
+type SolaRawSchedule = {
+  ScheduleId: string
+  Revision: number
+  StartDate: string
+  CalendarCulture: string
+  Amount: number
+  IntervalType: string
+  IntervalCount: number
+  TotalPayments?: number
+  PaymentMethodId?: string
+  FailedTransactionRetryTimes?: number
+  DaysBetweenRetries?: number
+  Custom02?: string
+}
+
+async function getScheduleRaw(scheduleId: string): Promise<SolaRawSchedule | null> {
+  type Raw = SolaListResponse & { Schedules?: SolaRawSchedule[] }
+  let nextToken = ''
+  do {
+    const json = await solaListRequest<Raw>('/ListSchedules', { NextToken: nextToken })
+    if (json.Result !== 'S') throw new Error(json.Error || 'Failed to list Sola schedules')
+    const match = (json.Schedules ?? []).find(s => s.ScheduleId === scheduleId)
+    if (match) return match
+    nextToken = json.NextToken ?? ''
+  } while (nextToken)
+  return null
+}
+
 // Stops future occurrences of a schedule. Not gated by test mode itself —
 // callers only ever cancel schedules that exist (either a real one from live
 // mode, or one that was never actually created in Sola because it was
 // simulated — see the schedule cancellation route for that distinction).
 export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateScheduleResult> {
+  const current = await getScheduleRaw(scheduleId)
+  if (!current) return { ok: false, error: 'Schedule not found in Sola' }
+
+  // EndDate must be strictly in the future ("xExpireDate must be in the
+  // future") — today is rejected even for a schedule that already ran today,
+  // so tomorrow is the earliest valid stop point. Today's already-processed
+  // charge (if any) is unaffected either way.
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+
   const json = await solaRequest('/UpdateSchedule', {
     ScheduleId: scheduleId,
-    EndDate: new Date().toISOString().slice(0, 10),
+    Revision: current.Revision,
+    StartDate: current.StartDate,
+    CalendarCulture: current.CalendarCulture,
+    Amount: current.Amount,
+    IntervalType: current.IntervalType,
+    IntervalCount: current.IntervalCount,
+    TotalPayments: current.TotalPayments,
+    PaymentMethodId: current.PaymentMethodId,
+    FailedTransactionRetryTimes: current.FailedTransactionRetryTimes,
+    DaysBetweenRetries: current.DaysBetweenRetries,
+    Custom02: current.Custom02,
+    EndDate: tomorrow.toISOString().slice(0, 10),
   })
   if (json.Result === 'S') return { ok: true }
   return { ok: false, error: json.Error || 'Failed to cancel schedule' }
