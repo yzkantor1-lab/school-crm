@@ -810,6 +810,12 @@ export default function StudentTuitionPage() {
   } | null>(null)
   const [loading, setLoading]   = useState(true)
   const [loadError, setLoadError] = useState(false)
+  // Individual queries in load() below can fail (RLS, timeout, transient
+  // Postgrest error) without throwing — Supabase resolves with {data: null,
+  // error} rather than rejecting, so a silent `data ?? []` previously masked
+  // this as "no records" instead of "couldn't load records," which is how a
+  // fully-paid plan could render as if nothing had ever been paid.
+  const [dataWarnings, setDataWarnings] = useState<string[]>([])
   const [expandedPlan, setExpandedPlan] = useState<string | null>(null)
 
   const [showAddPlan, setShowAddPlan]   = useState(false)
@@ -840,7 +846,10 @@ export default function StudentTuitionPage() {
   const load = useCallback(async () => {
     setLoadError(false)
     try {
-      const [{ data: s }, { data: p }, { data: pay }, { data: pm }, { data: ds }, { data: sched }] = await Promise.all([
+      const [
+        { data: s, error: sErr }, { data: p, error: pErr }, { data: pay, error: payErr },
+        { data: pm, error: pmErr }, { data: ds, error: dsErr }, { data: sched, error: schedErr },
+      ] = await Promise.all([
         supabase.from('students').select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title,registration_fee_status,registration_fee_amount,registration_fee_paid_date').eq('id', studentId).single(),
         supabase.from('tuition_plans').select('*').eq('student_id', studentId).order('created_at', { ascending: false }),
         supabase.from('tuition_payments').select('*').eq('student_id', studentId).order('due_date'),
@@ -849,6 +858,16 @@ export default function StudentTuitionPage() {
         supabase.from('payment_schedules').select('id,status,amount,start_date,interval_type,interval_count,purpose,total_payments,payment_method_id,created_at')
           .eq('student_id', studentId).order('created_at', { ascending: false }),
       ])
+      const warnings: string[] = []
+      if (sErr) warnings.push(`Student record: ${sErr.message}`)
+      if (pErr) warnings.push(`Tuition plans: ${pErr.message}`)
+      if (payErr) warnings.push(`Tuition payments: ${payErr.message}`)
+      if (pmErr) warnings.push(`Payment methods: ${pmErr.message}`)
+      if (dsErr) warnings.push(`Linked donors: ${dsErr.message}`)
+      if (schedErr) warnings.push(`Recurring schedules: ${schedErr.message}`)
+      setDataWarnings(warnings)
+      if (warnings.length) console.error('Tuition page partial load failure:', warnings)
+
       setStudent(s)
       setPlans(p || [])
       setPayments(pay || [])
@@ -1366,6 +1385,18 @@ export default function StudentTuitionPage() {
   )
   if (!student) return <div className="text-center py-12 text-slate-400 text-sm">Student not found.</div>
 
+  const dataWarningBanner = dataWarnings.length > 0 && (
+    <div className="bg-red-50 border border-red-200 text-red-800 text-xs rounded-lg px-4 py-2.5 flex items-start justify-between gap-3">
+      <div>
+        <p className="font-medium">Some data on this page failed to load — balances below may be understated.</p>
+        <ul className="list-disc list-inside mt-1">
+          {dataWarnings.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
+      </div>
+      <button onClick={() => load()} className="shrink-0 text-red-700 hover:text-red-900 font-medium underline">Retry</button>
+    </div>
+  )
+
   // Building Fund panel operates on the same "current plan" TuitionSection
   // uses elsewhere: active status wins, else the most recently created plan.
   const currentPlan = plans.find(p => p.status === 'active') || plans[0]
@@ -1393,6 +1424,8 @@ export default function StudentTuitionPage() {
           {student.first_name} {student.last_name}
         </Link>
       </div>
+
+      {dataWarningBanner}
 
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div className="flex items-center gap-3">
