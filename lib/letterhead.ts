@@ -15,6 +15,20 @@ const LETTERHEAD_ASPECT_RATIO = LETTERHEAD_HEIGHT / LETTERHEAD_WIDTH
 export const LETTERHEAD_FOOTER_LINE1 = 'Mailing address: 700 5th Avenue • Toms River New Jersey 08757 • 732-800-1011'
 export const LETTERHEAD_FOOTER_LINE2 = 'Email Address: nesivhatalmud@gmail.com'
 
+const LETTERHEAD_IMG_WIDTH = 130
+const LETTERHEAD_IMG_HEIGHT = LETTERHEAD_IMG_WIDTH * LETTERHEAD_ASPECT_RATIO
+const LETTERHEAD_TITLE_Y = 8 + LETTERHEAD_IMG_HEIGHT + 10
+
+// Where body content should start on any page that opens with a freshly-
+// drawn header — same value drawLetterheadHeader() returns, exported so
+// autoTable's per-page `margin.top` (below) can reserve exactly this much
+// space on continuation pages it creates on its own.
+export const LETTERHEAD_CONTENT_START_Y = LETTERHEAD_TITLE_Y + 10
+
+// Bottom space to reserve so a table's last row on any page never runs
+// into the footer drawn at pageHeight - 16.
+export const LETTERHEAD_FOOTER_RESERVED_HEIGHT = 24
+
 let cachedLetterheadDataUrl: string | null = null
 
 function renderLetterheadCanvas(): string {
@@ -66,22 +80,19 @@ function getLetterheadImage(): string {
 // Returns the y-coordinate (mm) where body content should start.
 export function drawLetterheadHeader(doc: any, title: string): number {
   const pageWidth = doc.internal.pageSize.getWidth()
-  const imgWidth = 130
-  const imgHeight = imgWidth * LETTERHEAD_ASPECT_RATIO
-  const imgX = (pageWidth - imgWidth) / 2
-  doc.addImage(getLetterheadImage(), 'PNG', imgX, 8, imgWidth, imgHeight)
+  const imgX = (pageWidth - LETTERHEAD_IMG_WIDTH) / 2
+  doc.addImage(getLetterheadImage(), 'PNG', imgX, 8, LETTERHEAD_IMG_WIDTH, LETTERHEAD_IMG_HEIGHT)
 
-  const titleY = 8 + imgHeight + 10
   doc.setFontSize(13)
   doc.setFont('helvetica', 'bold')
-  doc.text(title, 14, titleY)
+  doc.text(title, 14, LETTERHEAD_TITLE_Y)
   doc.setFontSize(9)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(120)
-  doc.text(`Date: ${new Date().toLocaleDateString()}`, pageWidth - 14, titleY, { align: 'right' })
+  doc.text(`Date: ${new Date().toLocaleDateString()}`, pageWidth - 14, LETTERHEAD_TITLE_Y, { align: 'right' })
   doc.setTextColor(0)
 
-  return titleY + 10
+  return LETTERHEAD_CONTENT_START_Y
 }
 
 // Draws the letterhead's footer contact info near the bottom of the current page.
@@ -95,4 +106,22 @@ export function drawLetterheadFooter(doc: any) {
   doc.text(LETTERHEAD_FOOTER_LINE1, pageWidth / 2, y, { align: 'center' })
   doc.text(LETTERHEAD_FOOTER_LINE2, pageWidth / 2, y + 5, { align: 'center' })
   doc.setTextColor(0)
+}
+
+// Spread into any jspdf-autotable call so the letterhead header+footer
+// repeat on every page that table spans — including continuation pages
+// autoTable creates on its own when content overflows a page, which
+// otherwise get neither (autoTable has no idea the letterhead exists).
+// `didDrawPage` fires once per page a table touches, so on a document
+// with several tables this may redraw the header/footer more than once
+// per page — harmless, since it's the same image at the same coordinates
+// each time.
+export function letterheadTableOptions(doc: any, title: string, sideMargins: { left: number; right: number }) {
+  return {
+    margin: { top: LETTERHEAD_CONTENT_START_Y, bottom: LETTERHEAD_FOOTER_RESERVED_HEIGHT, ...sideMargins },
+    didDrawPage: () => {
+      drawLetterheadHeader(doc, title)
+      drawLetterheadFooter(doc)
+    },
+  }
 }

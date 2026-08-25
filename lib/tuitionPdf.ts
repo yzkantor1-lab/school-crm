@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- jspdf-autotable types its jsPDF document param as `any` upstream (see jspdf-autotable/dist/index.d.ts); no more precise type is available for the `doc` handle used throughout this file. */
 
-import { drawLetterheadHeader, drawLetterheadFooter } from './letterhead'
+import { drawLetterheadHeader, drawLetterheadFooter, letterheadTableOptions } from './letterhead'
 import { showPdfPreview } from './pdfPreview'
 
 export type BillStudent = {
@@ -105,7 +105,8 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
   const buildingFundBalance = buildingFund - buildingFundPaid
   const totalBalance = tuitionBalance + buildingFundBalance
 
-  let y = drawLetterheadHeader(doc, 'TUITION STATEMENT')
+  const docTitle = 'TUITION STATEMENT'
+  let y = drawLetterheadHeader(doc, docTitle)
 
   {
     const title = opts.student.parents_title ? `${opts.student.parents_title} ` : ''
@@ -156,7 +157,7 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
       body: opts.semesterRows.map(r => [r.label + (r.enrolled ? '' : ' (not enrolled)'), r.dates, `$${r.amount.toFixed(2)}`]),
       styles: { fontSize: 9, cellPadding: 3 },
       headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold' },
-      margin: { left: 14, right: 14 },
+      ...letterheadTableOptions(doc, docTitle, { left: 14, right: 14 }),
     })
     y = (doc as any).lastAutoTable.finalY + 8
   } else if (opts.plan.payment_structure) {
@@ -202,7 +203,7 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
     theme: 'plain',
     styles: { fontSize: 10, cellPadding: 3 },
     columnStyles: { 0: { fontStyle: 'bold' }, 1: { halign: 'right' } },
-    margin: { left: 100, right: 14 },
+    ...letterheadTableOptions(doc, docTitle, { left: 100, right: 14 }),
     didParseCell: (data: any) => {
       if (boldRows.has(data.row.index)) {
         data.cell.styles.fontStyle = 'bold'
@@ -235,7 +236,7 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
       styles: { fontSize: 8, cellPadding: 2.5 },
       headStyles: { fillColor: [100, 116, 139], textColor: 255, fontStyle: 'bold' },
       alternateRowStyles: { fillColor: [248, 250, 252] },
-      margin: { left: 14, right: 14 },
+      ...letterheadTableOptions(doc, docTitle, { left: 14, right: 14 }),
     })
     y = (doc as any).lastAutoTable.finalY + 8
   }
@@ -276,7 +277,8 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
   const isRegFee = opts.payment.payment_type === 'registration_fee'
   const isPhoneCharge = opts.payment.payment_type === 'phone_charge'
 
-  const headerY = drawLetterheadHeader(doc, isDonation ? 'DONATION RECEIPT' : isRegFee ? 'REGISTRATION FEE RECEIPT' : isPhoneCharge ? 'PHONE CHARGE RECEIPT' : 'PAYMENT RECEIPT')
+  const docTitle = isDonation ? 'DONATION RECEIPT' : isRegFee ? 'REGISTRATION FEE RECEIPT' : isPhoneCharge ? 'PHONE CHARGE RECEIPT' : 'PAYMENT RECEIPT'
+  const headerY = drawLetterheadHeader(doc, docTitle)
   const typeLabel = paymentTypeLabel(opts.payment.payment_type)
 
   doc.setFontSize(10)
@@ -303,7 +305,7 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
     theme: 'plain',
     styles: { fontSize: 10, cellPadding: 3 },
     columnStyles: { 0: { fontStyle: 'bold' }, 1: { halign: 'right' } },
-    margin: { left: 14, right: 14 },
+    ...letterheadTableOptions(doc, docTitle, { left: 14, right: 14 }),
   })
   let y = (doc as any).lastAutoTable.finalY + 8
 
@@ -314,7 +316,7 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
       theme: 'plain',
       styles: { fontSize: 12, cellPadding: 3, fontStyle: 'bold' },
       columnStyles: { 1: { halign: 'right', textColor: opts.balanceAfter > 0 ? [220, 38, 38] : [22, 163, 74] } },
-      margin: { left: 14, right: 14 },
+      ...letterheadTableOptions(doc, docTitle, { left: 14, right: 14 }),
     })
     y = (doc as any).lastAutoTable.finalY + 8
   }
