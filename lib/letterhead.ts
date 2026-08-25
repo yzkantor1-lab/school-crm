@@ -12,8 +12,8 @@ const LETTERHEAD_WIDTH = 700
 const LETTERHEAD_HEIGHT = 150
 const LETTERHEAD_ASPECT_RATIO = LETTERHEAD_HEIGHT / LETTERHEAD_WIDTH
 
-export const LETTERHEAD_FOOTER_LINE1 = '(732) 800-1011  •  nesivhatalmud@gmail.com'
-export const LETTERHEAD_FOOTER_LINE2 = 'Mailing Address: 700 5th Ave, Toms River, NJ 08757'
+export const LETTERHEAD_FOOTER_LINE1 = 'Mailing address: 700 5th Avenue • Toms River New Jersey 08757 • 732-800-1011'
+export const LETTERHEAD_FOOTER_LINE2 = 'Email Address: nesivhatalmud@gmail.com'
 
 let cachedLetterheadDataUrl: string | null = null
 
@@ -45,10 +45,14 @@ function renderLetterheadCanvas(): string {
   ctx.lineWidth = 1.5
   ctx.stroke()
 
+  ctx.textAlign = 'right'
+  ctx.font = 'bold 16px Arial, sans-serif'
+  ctx.fillText('בס"ד', LETTERHEAD_WIDTH - 80, 100)
+
   ctx.textAlign = 'left'
-  ctx.font = '17px Arial, sans-serif'
-  ctx.fillText('הרב משה ריידעל', 80, 110)
-  ctx.fillText('ראש הישיבה', 80, 134)
+  ctx.font = 'bold 17px Arial, sans-serif'
+  ctx.fillText('הרב משה ריידעל', 80, 116)
+  ctx.fillText('ראש הישיבה', 80, 138)
 
   return canvas.toDataURL('image/png')
 }
