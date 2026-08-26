@@ -29,15 +29,29 @@ export async function GET(req: NextRequest) {
     // Get the email address from the token
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client })
     const { data: userInfo } = await oauth2.userinfo.get()
+    if (!userInfo.email) return NextResponse.redirect(`${BASE}/admin/settings?tab=email&error=token_exchange`)
+    if (!tokens.refresh_token) return NextResponse.redirect(`${BASE}/admin/settings?tab=email&error=no_refresh_token`)
 
-    // Persist refresh token + from-email in site_settings
-    const upserts = [
-      { key: 'google_refresh_token', value: tokens.refresh_token || '' },
-      { key: 'google_from_email',    value: userInfo.email || '' },
-    ]
-    await Promise.all(
-      upserts.map(u => supabase.from('site_settings').upsert(u, { onConflict: 'key' }))
-    )
+    // One row per connected account, upserted by email so reconnecting the
+    // same address updates its token rather than creating a duplicate. The
+    // very first account connected becomes the default automatically;
+    // afterward, staff pick the default explicitly in Settings → Email.
+    const { count } = await supabase.from('email_accounts').select('id', { count: 'exact', head: true })
+
+    // is_default is deliberately omitted unless this is the very first
+    // account ever connected — an upsert that reconnects an EXISTING
+    // account (e.g. after an invalid_grant) must never touch its current
+    // default status, and omitting the key (rather than passing false)
+    // leaves it untouched on the UPDATE path.
+    const { error } = await supabase.from('email_accounts').upsert([{
+      label: userInfo.email,
+      email: userInfo.email,
+      method: 'oauth',
+      oauth_refresh_token: tokens.refresh_token,
+      updated_at: new Date().toISOString(),
+      ...(count === 0 ? { is_default: true } : {}),
+    }], { onConflict: 'email' })
+    if (error) return NextResponse.redirect(`${BASE}/admin/settings?tab=email&error=token_exchange`)
 
     return NextResponse.redirect(`${BASE}/admin/settings?tab=email&success=connected`)
   } catch {

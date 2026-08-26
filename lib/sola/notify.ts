@@ -1,10 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { sendMailViaGoogle } from '@/lib/email'
 
-// Sends "a payment failed" to the connected Gmail account (Settings > Email)
-// — reuses the same account transactional receipts/statements go out from,
-// since that's the only outbound email path already wired up in this app.
-// Best-effort: a notification failure is logged, never thrown, since it
+// Sends "a payment failed" to the default connected account (Settings >
+// Email) — reuses the same account transactional receipts/statements go out
+// from, since that's the only outbound email path already wired up in this
+// app. Best-effort: a notification failure is logged, never thrown, since it
 // should never mask the underlying payment failure it's reporting on.
 export async function notifyStaffOfPaymentFailure(opts: {
   ownerName: string
@@ -15,9 +15,9 @@ export async function notifyStaffOfPaymentFailure(opts: {
 }) {
   try {
     const admin = createAdminClient()
-    const { data } = await admin.from('site_settings').select('value').eq('key', 'google_from_email').maybeSingle()
-    const to = data?.value
-    if (!to) { console.warn('No notification email configured (Settings > Email) — skipping payment failure notification.'); return }
+    const { data } = await admin.from('email_accounts').select('email').eq('is_default', true).maybeSingle()
+    const to = data?.email
+    if (!to) { console.warn('No default connected email account (Settings > Email) — skipping payment failure notification.'); return }
 
     await sendMailViaGoogle(admin, {
       to: [to],

@@ -339,16 +339,32 @@ function TuitionTab() {
   )
 }
 
+type EmailAccountRow = {
+  id: string
+  label: string
+  email: string
+  method: 'oauth' | 'app_password'
+  is_default: boolean
+}
+
 function EmailTab() {
   const { getAll, set } = useSettings()
   const supabase = createClient()
   const searchParams = useSearchParams()
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
-  const [fromEmail, setFromEmail] = useState('')
-  const [connected, setConnected] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+
+  const [accounts, setAccounts] = useState<EmailAccountRow[]>([])
+  const [loadingAccounts, setLoadingAccounts] = useState(true)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [showAppPasswordForm, setShowAppPasswordForm] = useState(false)
+  const [newLabel, setNewLabel] = useState('')
+  const [newEmail, setNewEmail] = useState('')
+  const [newAppPassword, setNewAppPassword] = useState('')
+  const [addError, setAddError] = useState('')
+  const [addingAccount, setAddingAccount] = useState(false)
 
   // Feedback from OAuth redirect, derived directly from the URL — no effect needed.
   const status = useMemo<{ type: 'success' | 'error'; msg: string } | null>(() => {
@@ -358,17 +374,24 @@ function EmailTab() {
     if (err === 'missing_credentials') return { type: 'error', msg: 'Save your Client ID and Secret first, then connect.' }
     if (err === 'oauth_denied')       return { type: 'error', msg: 'Google authorization was cancelled.' }
     if (err === 'token_exchange')     return { type: 'error', msg: 'Failed to exchange authorization code. Check your credentials.' }
+    if (err === 'no_refresh_token')   return { type: 'error', msg: "Google didn't return a refresh token — try disconnecting this account in your Google Account's third-party access settings, then reconnect." }
     return null
   }, [searchParams])
 
+  const loadAccounts = useCallback(async () => {
+    const { data } = await supabase.from('email_accounts').select('id,label,email,method,is_default').order('is_default', { ascending: false }).order('label')
+    setAccounts(data ?? [])
+    setLoadingAccounts(false)
+  }, [supabase])
+
   useEffect(() => {
-    getAll(['google_client_id', 'google_client_secret', 'google_refresh_token', 'google_from_email']).then(m => {
+    getAll(['google_client_id', 'google_client_secret']).then(m => {
       setClientId(m.google_client_id || '')
       setClientSecret(m.google_client_secret || '')
-      setFromEmail(m.google_from_email || '')
-      setConnected(!!m.google_refresh_token)
     })
-  }, [getAll])
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount
+    loadAccounts()
+  }, [getAll, loadAccounts])
 
   async function saveCredentials() {
     setSaving(true)
@@ -381,12 +404,43 @@ function EmailTab() {
     setTimeout(() => setSaved(false), 2500)
   }
 
-  async function disconnect() {
-    if (!confirm('Disconnect Google account? You will need to reconnect to send emails.')) return
-    await supabase.from('site_settings').upsert({ key: 'google_refresh_token', value: '' }, { onConflict: 'key' })
-    await supabase.from('site_settings').upsert({ key: 'google_from_email',    value: '' }, { onConflict: 'key' })
-    setConnected(false)
-    setFromEmail('')
+  async function makeDefault(id: string) {
+    setBusyId(id)
+    // Unset the current default first — a partial unique index only allows
+    // one is_default=true row at a time, so setting the new one first
+    // (while the old one is still true) would violate it.
+    await supabase.from('email_accounts').update({ is_default: false }).eq('is_default', true)
+    await supabase.from('email_accounts').update({ is_default: true }).eq('id', id)
+    await loadAccounts()
+    setBusyId(null)
+  }
+
+  async function removeAccount(account: EmailAccountRow) {
+    if (!confirm(`Disconnect ${account.email}?${account.is_default ? ' It is the current default — nothing will send until you connect another account or set a new default.' : ''}`)) return
+    setBusyId(account.id)
+    await supabase.from('email_accounts').delete().eq('id', account.id)
+    await loadAccounts()
+    setBusyId(null)
+  }
+
+  async function addAppPasswordAccount() {
+    setAddError('')
+    if (!newLabel.trim() || !newEmail.trim() || !newAppPassword.trim()) {
+      setAddError('Label, email, and app password are all required.')
+      return
+    }
+    setAddingAccount(true)
+    const { error } = await supabase.from('email_accounts').insert([{
+      label: newLabel.trim(),
+      email: newEmail.trim(),
+      method: 'app_password',
+      app_password: newAppPassword.trim(),
+      is_default: accounts.length === 0,
+    }])
+    setAddingAccount(false)
+    if (error) { setAddError(error.message); return }
+    setNewLabel(''); setNewEmail(''); setNewAppPassword(''); setShowAppPasswordForm(false)
+    await loadAccounts()
   }
 
   return (
@@ -400,42 +454,123 @@ function EmailTab() {
         </div>
       )}
 
-      {/* Connection status */}
-      <div className={`flex items-center gap-3 p-4 rounded-xl border ${connected ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-200'}`}>
-        {connected
-          ? <Wifi size={20} className="text-green-600 flex-shrink-0" />
-          : <WifiOff size={20} className="text-slate-400 flex-shrink-0" />}
-        <div className="flex-1 min-w-0">
-          <p className={`text-sm font-medium ${connected ? 'text-green-800' : 'text-slate-600'}`}>
-            {connected ? 'Connected to Google' : 'Not connected'}
-          </p>
-          {fromEmail && <p className="text-xs text-green-600 mt-0.5">Sending as: {fromEmail}</p>}
-          {!connected && <p className="text-xs text-slate-400 mt-0.5">Complete the steps below to send email from this CRM.</p>}
-        </div>
-        {connected && (
-          <button onClick={disconnect} className="text-xs text-red-500 hover:text-red-700 font-medium flex-shrink-0">
-            Disconnect
-          </button>
+      {/* Connected accounts */}
+      <div className="space-y-3">
+        <p className="text-sm font-semibold text-slate-700">Connected Accounts</p>
+        {loadingAccounts ? (
+          <p className="text-xs text-slate-400">Loading…</p>
+        ) : accounts.length === 0 ? (
+          <div className="flex items-center gap-3 p-4 rounded-xl border bg-slate-50 border-slate-200">
+            <WifiOff size={20} className="text-slate-400 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-slate-600">No accounts connected</p>
+              <p className="text-xs text-slate-400 mt-0.5">Connect one below to send email from this CRM.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {accounts.map(a => (
+              <div key={a.id} className={`flex items-center gap-3 p-4 rounded-xl border ${a.is_default ? 'bg-green-50 border-green-200' : 'bg-white border-slate-200'}`}>
+                {a.is_default
+                  ? <Wifi size={20} className="text-green-600 flex-shrink-0" />
+                  : <Mail size={20} className="text-slate-400 flex-shrink-0" />}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-medium text-slate-800 truncate">{a.label}</p>
+                    <span className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 flex items-center gap-1">
+                      {a.method === 'oauth' ? <Wifi size={9} /> : <KeyRound size={9} />}
+                      {a.method === 'oauth' ? 'OAuth' : 'App Password'}
+                    </span>
+                    {a.is_default && (
+                      <span className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">Default</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">{a.email}</p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {!a.is_default && (
+                    <button disabled={busyId === a.id} onClick={() => makeDefault(a.id)}
+                      className="text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50">
+                      Make Default
+                    </button>
+                  )}
+                  <button disabled={busyId === a.id} onClick={() => removeAccount(a)}
+                    className="text-xs text-red-500 hover:text-red-700 font-medium disabled:opacity-50 flex items-center gap-1">
+                    <Trash2 size={12} /> Disconnect
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
-      {/* Step 1: Google Cloud setup instructions */}
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 space-y-2">
-        <p className="text-sm font-semibold text-blue-900">Step 1 — Set up Google Cloud credentials</p>
-        <ol className="text-xs text-blue-800 space-y-1 list-decimal list-inside">
-          <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="underline inline-flex items-center gap-0.5">console.cloud.google.com <ExternalLink size={10} /></a></li>
-          <li>Create a project (or select an existing one)</li>
-          <li>Enable the <strong>Gmail API</strong> under APIs &amp; Services → Library</li>
-          <li>Go to APIs &amp; Services → Credentials → Create OAuth 2.0 Client ID</li>
-          <li>Application type: <strong>Web application</strong></li>
-          <li>Add Authorized redirect URI: <code className="bg-blue-100 px-1 rounded">{typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com'}/api/auth/google/callback</code></li>
-          <li>Copy the Client ID and Client Secret below</li>
-        </ol>
+      {/* Add via App Password */}
+      <div className="space-y-3 border-t border-slate-100 pt-5">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-slate-700">Add a personal Gmail account (App Password)</p>
+          {!showAppPasswordForm && (
+            <button onClick={() => setShowAppPasswordForm(true)} className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium">
+              <Plus size={13} /> Add Account
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-slate-400">
+          For a personal @gmail.com address that can&apos;t be added to this app&apos;s OAuth consent screen (e.g. it&apos;s outside your Workspace org).
+          Requires 2-Step Verification enabled on that Google account — generate an App Password at{' '}
+          <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer" className="underline inline-flex items-center gap-0.5">
+            myaccount.google.com/apppasswords <ExternalLink size={10} />
+          </a>.
+        </p>
+        {showAppPasswordForm && (
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+            {addError && <p className="text-xs text-red-600">{addError}</p>}
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Label</label>
+              <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="e.g. Nesiv Hatalmud (Personal)"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Gmail Address</label>
+              <input value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="nesivhatalmud@gmail.com"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">App Password</label>
+              <input type="password" value={newAppPassword} onChange={e => setNewAppPassword(e.target.value)} placeholder="16-character app password"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono" />
+            </div>
+            <div className="flex items-center gap-2">
+              <button disabled={addingAccount} onClick={addAppPasswordAccount}
+                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-medium">
+                {addingAccount ? 'Adding…' : 'Add Account'}
+              </button>
+              <button onClick={() => { setShowAppPasswordForm(false); setAddError('') }} className="text-xs text-slate-400 hover:text-slate-600">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Step 2: Enter credentials */}
-      <div className="space-y-4">
-        <p className="text-sm font-semibold text-slate-700">Step 2 — Enter your credentials</p>
+      {/* OAuth app configuration + connect */}
+      <div className="space-y-4 border-t border-slate-100 pt-5">
+        <p className="text-sm font-semibold text-slate-700">Add a Workspace account (OAuth)</p>
+
+        <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 space-y-2">
+          <p className="text-sm font-semibold text-blue-900">OAuth app configuration (one-time, shared by every OAuth account)</p>
+          <ol className="text-xs text-blue-800 space-y-1 list-decimal list-inside">
+            <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="underline inline-flex items-center gap-0.5">console.cloud.google.com <ExternalLink size={10} /></a></li>
+            <li>Create a project (or select an existing one)</li>
+            <li>Enable the <strong>Gmail API</strong> under APIs &amp; Services → Library</li>
+            <li>Go to APIs &amp; Services → Credentials → Create OAuth 2.0 Client ID</li>
+            <li>Application type: <strong>Web application</strong></li>
+            <li>Add Authorized redirect URI: <code className="bg-blue-100 px-1 rounded">{typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com'}/api/auth/google/callback</code></li>
+            <li>On the OAuth consent screen, set the audience to <strong>Internal</strong> if this account is inside your Workspace org</li>
+            <li>Copy the Client ID and Client Secret below</li>
+          </ol>
+        </div>
+
         <div>
           <label className="block text-xs font-medium text-slate-500 mb-1">Google OAuth Client ID</label>
           <input
@@ -456,12 +591,8 @@ function EmailTab() {
           />
         </div>
         <SaveBar onSave={saveCredentials} saving={saving} saved={saved} />
-      </div>
 
-      {/* Step 3: Connect */}
-      <div className="space-y-3 border-t border-slate-100 pt-5">
-        <p className="text-sm font-semibold text-slate-700">Step 3 — Authorize with Google</p>
-        <p className="text-xs text-slate-400">After saving your credentials above, click the button below to sign in with your Google Workspace account. You only need to do this once.</p>
+        <p className="text-xs text-slate-400">After saving credentials above, sign in with the Google account you want to connect. You can repeat this for more than one Workspace account.</p>
         {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- this hits an API route (OAuth redirect), not a page */}
         <a
           href="/api/auth/google"
@@ -473,7 +604,7 @@ function EmailTab() {
             <path fill="#FBBC05" d="M24 43c5.9 0 10.9-2 14.5-5.4l-6.7-5.5C29.9 34 27.1 35 24 35c-6 0-11.1-4-12.9-9.5l-7 5.4C7.8 38.7 15.4 43 24 43z"/>
             <path fill="#EA4335" d="M43.6 20H24v8.5h11.8c-.9 2.7-2.7 5-5 6.6l6.7 5.5C41.4 37.1 44 30.6 44 23c0-1.3-.1-2.7-.4-4z"/>
           </svg>
-          {connected ? 'Reconnect Google Account' : 'Connect Google Account'}
+          Connect with Google
         </a>
       </div>
     </div>

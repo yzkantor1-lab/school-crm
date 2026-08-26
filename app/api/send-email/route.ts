@@ -4,12 +4,13 @@ import { sendMailViaGoogle } from '@/lib/email'
 
 export async function POST(req: NextRequest) {
   try {
-    const { to, subject, body, isHtml = false, attachments } = await req.json() as {
+    const { to, subject, body, isHtml = false, attachments, accountId } = await req.json() as {
       to: string[]
       subject: string
       body: string
       isHtml?: boolean
       attachments?: { filename: string; content: string; contentType?: string }[]
+      accountId?: string
     }
 
     if (!to?.length || !subject || !body) {
@@ -17,9 +18,9 @@ export async function POST(req: NextRequest) {
     }
 
     const supabase = await createClient()
-    const { sent } = await sendMailViaGoogle(supabase, { to, subject, body, isHtml, attachments })
+    const { sent, fromEmail, accountId: usedAccountId } = await sendMailViaGoogle(supabase, { to, subject, body, isHtml, attachments, accountId })
 
-    return NextResponse.json({ ok: true, sent })
+    return NextResponse.json({ ok: true, sent, fromEmail, accountId: usedAccountId })
   } catch (err) {
     console.error('send-email error', err)
     const message = err instanceof Error ? err.message : 'Failed to send email'
