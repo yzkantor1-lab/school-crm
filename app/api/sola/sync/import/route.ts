@@ -127,7 +127,11 @@ export async function POST(req: Request) {
       if (isRegFee) {
         const { data: student } = await supabase.from('students').select('registration_fee_status').eq('id', studentId).single()
         if (!student?.registration_fee_status) {
-          await supabase.from('students').update({ registration_fee_status: 'pending', registration_fee_amount: 250 }).eq('id', studentId)
+          // Charge whatever was actually paid, not a hardcoded rate — the
+          // registration fee amount has changed over time (was a flat $250,
+          // now $75/$50 depending on when it's paid), and this import path
+          // handles both old and new Sola history.
+          await supabase.from('students').update({ registration_fee_status: 'pending', registration_fee_amount: payment.amount }).eq('id', studentId)
         }
       }
       await supabase.from('sola_sync_payments').update({ import_status: 'imported', charge_kind: 'tuition', tuition_payment_id: inserted.id }).eq('id', payment.id)

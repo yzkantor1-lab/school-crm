@@ -920,7 +920,7 @@ export default function StudentTuitionPage() {
     setStudent({ ...student, ...fields })
     await supabase.from('students').update(fields).eq('id', studentId)
   }
-  const addRegistrationFee = () => setRegistrationFee({ registration_fee_status: 'pending', registration_fee_amount: 250, registration_fee_paid_date: null })
+  const addRegistrationFee = (amount: number) => setRegistrationFee({ registration_fee_status: 'pending', registration_fee_amount: amount, registration_fee_paid_date: null })
   const removeRegistrationFee = () => setRegistrationFee({ registration_fee_status: null, registration_fee_paid_date: null })
 
   // Registration fee has no plan-level waived flag to toggle (it isn't tied
@@ -1629,10 +1629,23 @@ export default function StudentTuitionPage() {
               </div>
               <div className="flex items-center gap-2">
                 {!student.registration_fee_status && (
-                  <button onClick={addRegistrationFee}
-                    className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition-colors">
-                    <Plus size={13} /> Add $250 Registration Fee
-                  </button>
+                  <>
+                    <button onClick={() => addRegistrationFee(250)}
+                      title="Standard rate for a new student's first enrollment"
+                      className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition-colors">
+                      <Plus size={13} /> Add $250 (New Student)
+                    </button>
+                    <button onClick={() => addRegistrationFee(75)}
+                      title="Current-year rate for a returning student on the updated tuition contract"
+                      className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition-colors">
+                      <Plus size={13} /> Add $75 (Returning)
+                    </button>
+                    <button onClick={() => addRegistrationFee(50)}
+                      title="For a returning student's family paying before the September 1 early-registration cutoff"
+                      className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-rose-50 transition-colors">
+                      <Plus size={13} /> Add $50 (before Sep 1)
+                    </button>
+                  </>
                 )}
                 {student.registration_fee_status && (
                   <button onClick={() => openAddPayment(REG_FEE_KEY)}

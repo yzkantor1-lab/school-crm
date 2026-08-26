@@ -449,7 +449,9 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
   const supabase = createClient()
   const isNew = !student?.id
   // New students get a $250 registration fee queued up automatically — managed
-  // (paid/waived) from the student's Tuition page, not from this form.
+  // (paid/waived) from the student's Tuition page, not from this form. The
+  // lower $75/$50 rate only applies to returning students on the current
+  // year's updated tuition contract, not new enrollments.
   const [form, setForm] = useState<StudentRow>(() =>
     student
       ? seedPaternalGrandparentsLastName(seedLegacyAddresses(student))

@@ -7,9 +7,12 @@ export function normalizeEmail(s: string | null | undefined) {
   return (s || '').trim().toLowerCase()
 }
 
+// 250 is the old (pre-2026–2027) flat registration fee — kept here so
+// syncing older Sola history still classifies it correctly; 75/50 are the
+// current standard/early-registration rates.
 export function suggestFeeType(amount: number | null): 'tuition' | 'building_fund' | 'registration_fee' | null {
   if (amount == null) return null
-  if (amount === 250) return 'registration_fee'
+  if (amount === 250 || amount === 75 || amount === 50) return 'registration_fee'
   if (amount === 750) return 'building_fund'
   return 'tuition'
 }
