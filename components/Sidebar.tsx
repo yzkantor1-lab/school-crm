@@ -9,7 +9,7 @@ import {
   BookOpen, BookMarked, UtensilsCrossed, Receipt, Wallet,
   MessageSquare, CalendarDays, LogOut, Globe, Heart, DollarSign,
   HandHeart, Repeat, TrendingDown, BarChart, BadgeDollarSign, Settings, Award, RefreshCw, PartyPopper,
-  ArrowLeftRight, Menu, X, Bell
+  ArrowLeftRight, Menu, X, Bell, FileStack
 } from 'lucide-react'
 
 const nav = [
@@ -28,6 +28,7 @@ const nav = [
   { label: 'Billing', href: '/admin/billing', icon: Receipt },
   { label: 'Accounting', href: '/admin/accounting', icon: Wallet },
   { label: 'Communications', href: '/admin/communications', icon: MessageSquare },
+  { label: 'Mail Merge', href: '/admin/mail-merge', icon: FileStack },
   { label: 'Website', href: '/admin/website', icon: Globe },
   { label: '— Fundraising —', href: '', icon: Heart, divider: true },
   { label: 'Donors', href: '/admin/donors', icon: Heart },
