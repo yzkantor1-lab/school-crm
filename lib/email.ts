@@ -29,15 +29,15 @@ type EmailAccount = {
 // so it must pass the service-role admin client instead).
 export async function sendMailViaGoogle(supabase: AnySupabaseClient, input: MailInput) {
   const accountQuery = supabase.from('email_accounts').select('id,email,method,oauth_refresh_token,app_password')
-  const { data: account } = input.accountId
+  const { data: account, error: accountError } = input.accountId
     ? await accountQuery.eq('id', input.accountId).single()
     : await accountQuery.eq('is_default', true).maybeSingle()
 
   if (!account) {
     throw new Error(
       input.accountId
-        ? 'That email account is no longer connected.'
-        : 'No connected email account. Go to Settings → Email to connect one and set a default.'
+        ? `Could not look up that email account${accountError ? `: ${accountError.message}` : ' (no longer connected)'}`
+        : `No connected email account${accountError ? `: ${accountError.message}` : ''}. Go to Settings → Email to connect one and set a default.`
     )
   }
   const acct = account as EmailAccount
