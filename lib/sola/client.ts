@@ -182,10 +182,25 @@ export async function getScheduleRaw(scheduleId: string): Promise<SolaRawSchedul
   return null
 }
 
-// Shared by cancelSchedule/tagScheduleCustom02 below: fetches the schedule's
-// current field values and resends them alongside whatever's overridden, so
-// a single-purpose update (stop it / tag it) can't accidentally blank out
-// every other field via UpdateSchedule's full-replace semantics.
+// Shared by cancelSchedule/tagScheduleCustom02/updateScheduleDetails below:
+// fetches the schedule's current field values and resends them alongside
+// whatever's overridden, so a single-purpose update (stop it / tag it /
+// change its amount) can't accidentally blank out every other field via
+// UpdateSchedule's full-replace semantics.
+//
+// IntervalType/IntervalCount are deliberately NOT in this base resend —
+// confirmed live that Sola rejects them outright ("Invalid parameters:
+// IntervalType, IntervalCount") on any schedule that has already processed
+// at least one payment, even when resending their own unchanged current
+// values. They behave like StartDate (documented as "cannot be changed
+// after schedule begins") rather than the other full-replace fields.
+// Omitting them entirely is safe — Sola keeps the schedule's existing
+// cadence rather than clearing it, unlike the "no default = removed" rule
+// that forced StartDate/CalendarCulture/Revision into this base resend in
+// the first place. A caller that genuinely needs to change cadence must
+// pass IntervalType/IntervalCount via overrides — Sola will still reject
+// that for an already-running schedule, but the request is at least a
+// deliberate one, not an accidental side effect of resending "unchanged" data.
 async function replaceSchedule(scheduleId: string, overrides: Record<string, unknown>): Promise<SolaUpdateScheduleResult> {
   const current = await getScheduleRaw(scheduleId)
   if (!current) return { ok: false, error: 'Schedule not found in Sola' }
@@ -196,8 +211,6 @@ async function replaceSchedule(scheduleId: string, overrides: Record<string, unk
     StartDate: current.StartDate,
     CalendarCulture: current.CalendarCulture,
     Amount: current.Amount,
-    IntervalType: current.IntervalType,
-    IntervalCount: current.IntervalCount,
     TotalPayments: current.TotalPayments,
     PaymentMethodId: current.PaymentMethodId,
     FailedTransactionRetryTimes: current.FailedTransactionRetryTimes,
@@ -230,6 +243,37 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
 // webhook attribution for future charges. See promote-schedule/route.ts.
 export async function tagScheduleCustom02(scheduleId: string, custom02: string): Promise<SolaUpdateScheduleResult> {
   return replaceSchedule(scheduleId, { Custom02: custom02 })
+}
+
+// Edits an active schedule in place — amount, cadence, total-payments cap,
+// and/or which payment method it charges. Only the fields actually passed
+// are changed; everything else round-trips via replaceSchedule as usual.
+// `totalPayments: null` explicitly clears a fixed-#-of-payments cap (turns
+// a payment plan into open-ended recurring) — leaving it undefined instead
+// leaves whatever the schedule already had untouched.
+export async function updateScheduleDetails(scheduleId: string, changes: {
+  amount?: number
+  intervalType?: 'day' | 'week' | 'month' | 'year'
+  intervalCount?: number
+  totalPayments?: number | null
+  paymentMethodId?: string
+}): Promise<SolaUpdateScheduleResult> {
+  const overrides: Record<string, unknown> = {}
+  if (changes.amount !== undefined) overrides.Amount = changes.amount
+  if (changes.intervalType !== undefined) overrides.IntervalType = changes.intervalType
+  if (changes.intervalCount !== undefined) overrides.IntervalCount = changes.intervalCount
+  if (changes.totalPayments !== undefined) overrides.TotalPayments = changes.totalPayments
+  if (changes.paymentMethodId !== undefined) overrides.PaymentMethodId = changes.paymentMethodId
+  const result = await replaceSchedule(scheduleId, overrides)
+  // Confirmed live: Sola rejects any attempt to touch IntervalType/
+  // IntervalCount once a schedule has processed its first payment — a real
+  // API constraint, not a bug here. Translate it into something a staff
+  // member can actually act on instead of the raw parameter-name error.
+  if (!result.ok && (changes.intervalType !== undefined || changes.intervalCount !== undefined)
+    && /IntervalType|IntervalCount/i.test(result.error)) {
+    return { ok: false, error: "Sola doesn't allow changing how often a schedule bills once it's already processed a payment. Stop this schedule and set up a new one instead if the frequency needs to change." }
+  }
+  return result
 }
 
 // ── Sola Sync (read-only history pull) ──────────────────────────────────────

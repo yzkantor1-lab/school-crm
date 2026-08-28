@@ -22,6 +22,7 @@ import SentLettersPanel from '@/components/SentLettersPanel'
 import TuitionDocumentsPanel from '@/components/TuitionDocumentsPanel'
 import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
+import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
 import RecalculateScheduleModal from '@/components/sola/RecalculateScheduleModal'
 
 type Student = {
@@ -837,6 +838,7 @@ export default function StudentTuitionPage() {
   const [showChargeModal, setShowChargeModal] = useState(false)
   const [showRecurringModal, setShowRecurringModal] = useState(false)
   const [showPhoneRecurringModal, setShowPhoneRecurringModal] = useState(false)
+  const [manageScheduleId, setManageScheduleId] = useState<string | null>(null)
   const [schedules, setSchedules] = useState<PaymentSchedule[]>([])
   const [parentDonations, setParentDonations] = useState<ParentDonation[]>([])
   const [recalcTarget, setRecalcTarget] = useState<{
@@ -934,16 +936,6 @@ export default function StudentTuitionPage() {
       tuition_plan_id: null, student_id: studentId, amount, payment_date: todayStr(),
       status: 'forgiven', payment_type: 'registration_fee', notes: 'Registration fee forgiven',
     }])
-    load()
-  }
-
-  // Cancels the real Sola recurring schedule (not just a local flag) — same
-  // DELETE endpoint used everywhere a schedule gets stopped, which cancels
-  // it on Sola's side too so the card actually stops being charged.
-  async function stopRecurringSchedule(scheduleId: string, label: string) {
-    if (!confirm(`Stop the recurring ${label}? This cancels the schedule with Sola — no further charges will go through until it's set up again.`)) return
-    const res = await fetch(`/api/sola/schedule?id=${scheduleId}`, { method: 'DELETE' })
-    if (!res.ok) { const json = await res.json().catch(() => ({})); alert(json.error || 'Failed to stop the recurring charge.'); return }
     load()
   }
 
@@ -1420,6 +1412,7 @@ export default function StudentTuitionPage() {
   const phoneSchedules = schedules.filter(s => s.purpose === 'phone_charge')
   const tuitionSchedule = schedules.find(s => s.purpose === 'tuition' && s.status === 'active')
   const buildingFundSchedule = schedules.find(s => s.purpose === 'building_fund' && s.status === 'active')
+  const activeSchedules = schedules.filter(s => s.status === 'active')
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -1526,6 +1519,16 @@ export default function StudentTuitionPage() {
           savedMethods={savedPaymentMethods}
           defaultAmount={15}
           onCreated={load}
+        />
+      )}
+      {manageScheduleId && (
+        <ManageRecurringModal
+          onClose={() => setManageScheduleId(null)}
+          type="student"
+          schedules={activeSchedules}
+          savedMethods={savedPaymentMethods}
+          initialScheduleId={manageScheduleId}
+          onChanged={load}
         />
       )}
       {recalcTarget && (
@@ -1778,9 +1781,9 @@ export default function StudentTuitionPage() {
               </div>
               <div className="flex items-center gap-2">
                 {activeSchedule ? (
-                  <button onClick={() => stopRecurringSchedule(activeSchedule.id, 'Phone Charge')}
-                    className="flex items-center gap-1 text-xs text-slate-400 hover:text-red-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-red-50 transition-colors">
-                    <Ban size={13} /> Stop Recurring Charge
+                  <button onClick={() => setManageScheduleId(activeSchedule.id)}
+                    className="flex items-center gap-1 text-xs text-slate-400 hover:text-sky-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-sky-50 transition-colors">
+                    <Repeat size={13} /> Manage
                   </button>
                 ) : (
                   <button onClick={() => setShowPhoneRecurringModal(true)}
@@ -2479,9 +2482,9 @@ export default function StudentTuitionPage() {
                       {plan.id === currentPlan?.id && tuitionSchedule && (
                         <span className="inline-flex items-center gap-2 text-blue-600 font-medium">
                           <span className="inline-flex items-center gap-1"><Repeat size={12} /> {scheduleCadenceLabel(tuitionSchedule)}</span>
-                          <button onClick={e => { e.stopPropagation(); stopRecurringSchedule(tuitionSchedule.id, 'Tuition charge') }}
-                            className="text-slate-400 hover:text-red-600 font-normal underline">
-                            Stop
+                          <button onClick={e => { e.stopPropagation(); setManageScheduleId(tuitionSchedule.id) }}
+                            className="text-slate-400 hover:text-blue-600 font-normal underline">
+                            Manage
                           </button>
                         </span>
                       )}
@@ -2502,9 +2505,9 @@ export default function StudentTuitionPage() {
                         {plan.id === currentPlan?.id && buildingFundSchedule && (
                           <span className="inline-flex items-center gap-2 text-blue-600 font-medium">
                             <span className="inline-flex items-center gap-1"><Repeat size={12} /> {scheduleCadenceLabel(buildingFundSchedule)}</span>
-                            <button onClick={e => { e.stopPropagation(); stopRecurringSchedule(buildingFundSchedule.id, 'Building Fund charge') }}
-                              className="text-slate-400 hover:text-red-600 font-normal underline">
-                              Stop
+                            <button onClick={e => { e.stopPropagation(); setManageScheduleId(buildingFundSchedule.id) }}
+                              className="text-slate-400 hover:text-blue-600 font-normal underline">
+                              Manage
                             </button>
                           </span>
                         )}

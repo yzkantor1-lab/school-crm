@@ -8,7 +8,7 @@ import { formatCurrency } from '@/lib/currency'
 import {
   ArrowLeft, Edit2, Save, X, Trash2, DollarSign, Calendar,
   CreditCard, FileText, User, Mail, Phone, MapPin, Tag, Heart, Archive, ArchiveRestore,
-  Printer, GraduationCap, Search, ExternalLink, PartyPopper
+  Printer, GraduationCap, Search, ExternalLink, PartyPopper, Repeat
 } from 'lucide-react'
 import { generateDonationReceiptPDF, getDonationReceiptPdfBase64 } from '@/lib/donationPdf'
 import { openPreviewTab } from '@/lib/pdfPreview'
@@ -17,6 +17,7 @@ import PrintNoteModal from '@/components/PrintNoteModal'
 import SentLettersPanel from '@/components/SentLettersPanel'
 import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
+import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
 import TitleSelect from '@/components/TitleSelect'
@@ -34,6 +35,16 @@ type Donation = {
 }
 type LinkedStudent = { id: string; first_name: string; last_name: string }
 type EventOption = { id: string; name: string }
+type Schedule = {
+  id: string; purpose: string; amount: number
+  interval_type: string; interval_count: number
+  total_payments: number | null; payment_method_id: string | null
+}
+
+function scheduleCadence(s: Schedule) {
+  const amt = formatCurrency(s.amount)
+  return s.interval_count === 1 ? `${amt} / ${s.interval_type}` : `${amt} every ${s.interval_count} ${s.interval_type}s`
+}
 
 const DONATION_CATEGORIES = [
   { value: 'one_time', label: 'One-Time Donation' },
@@ -73,8 +84,10 @@ export default function DonorDetailPage() {
     run: (note: string | undefined, win: Window | null) => Promise<{ base64: string; filename: string }>
   } | null>(null)
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
+  const [schedules, setSchedules] = useState<Schedule[]>([])
   const [showChargeModal, setShowChargeModal] = useState(false)
   const [showRecurringModal, setShowRecurringModal] = useState(false)
+  const [showManageRecurring, setShowManageRecurring] = useState(false)
   const [events, setEvents] = useState<EventOption[]>([])
   const [linkedStudents, setLinkedStudents] = useState<LinkedStudent[]>([])
   const [studentQuery, setStudentQuery] = useState('')
@@ -92,12 +105,13 @@ export default function DonorDetailPage() {
 
   const fetchData = useCallback(async () => {
     setLoading(true)
-    const [{ data: d }, { data: dn }, { data: pm }, { data: ev }, { data: ds }] = await Promise.all([
+    const [{ data: d }, { data: dn }, { data: pm }, { data: ev }, { data: ds }, { data: sch }] = await Promise.all([
       supabase.from('donors').select('*').eq('id', id).maybeSingle(),
       supabase.from('donations').select('*,events(name)').eq('donor_id', id).order('donation_date', { ascending: false }),
       supabase.from('payment_methods').select('id,label').eq('donor_id', id).order('created_at', { ascending: false }),
       supabase.from('events').select('id,name').order('event_date', { ascending: false }),
       supabase.from('donor_students').select('students(id,first_name,last_name)').eq('donor_id', id),
+      supabase.from('payment_schedules').select('id,purpose,amount,interval_type,interval_count,total_payments,payment_method_id').eq('donor_id', id).eq('status', 'active'),
     ])
     setEvents(ev ?? [])
     setLinkedStudents(((ds ?? []) as unknown as { students: LinkedStudent }[]).map(r => r.students).filter(Boolean))
@@ -107,6 +121,7 @@ export default function DonorDetailPage() {
     }
     setDonations((dn ?? []) as unknown as Donation[])
     setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
+    setSchedules(sch ?? [])
     setLoading(false)
   }, [id, supabase])
 
@@ -261,9 +276,17 @@ export default function DonorDetailPage() {
             <div className="bg-blue-100 p-3 rounded-xl"><User className="text-blue-600" size={24} /></div>
             <div>
               <h2 className="text-xl font-bold text-slate-900">{donor.title ? `${donor.title} ` : ''}{donor.name}</h2>
-              <div className="flex gap-2 mt-1 flex-wrap">
+              <div className="flex gap-2 mt-1 flex-wrap items-center">
                 {donor.category && <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-medium"><Tag size={10} />{donor.category}</span>}
                 {donor.relationship && <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full font-medium"><Heart size={10} />{donor.relationship}</span>}
+                {schedules.length > 0 && (
+                  <button onClick={() => setShowManageRecurring(true)}
+                    title={schedules.map(s => `${s.purpose}: ${scheduleCadence(s)}`).join('\n')}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-700 hover:bg-violet-200 text-xs rounded-full font-medium transition-colors">
+                    <Repeat size={10} />
+                    {schedules.length === 1 ? scheduleCadence(schedules[0]) : `${schedules.length} active recurring`}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -500,6 +523,16 @@ export default function DonorDetailPage() {
           purposeOptions={[{ value: 'donation', label: 'Donation' }]}
           savedMethods={savedPaymentMethods}
           onCreated={fetchData}
+        />
+      )}
+      {showManageRecurring && (
+        <ManageRecurringModal
+          onClose={() => setShowManageRecurring(false)}
+          type="donor"
+          schedules={schedules}
+          savedMethods={savedPaymentMethods}
+          initialScheduleId={schedules.length === 1 ? schedules[0].id : undefined}
+          onChanged={fetchData}
         />
       )}
     </div>

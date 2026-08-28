@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Search, GraduationCap, Plus, ChevronRight, Filter, X, UserPlus, BookOpen, CalendarDays, Users, AlertCircle, Repeat } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
 import ExportButton from '@/components/ExportButton'
+import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
 import { SCHOOL_YEAR_SEMESTERS, currentGradeLevel } from '@/lib/semesters'
 
 // There's no per-installment schedule in the data — payments are only ever
@@ -147,10 +148,13 @@ type TuitionPlan = {
 }
 
 type ActiveSchedule = {
+  id: string
   purpose: string
   amount: number
   intervalType: string
   intervalCount: number
+  totalPayments: number | null
+  paymentMethodId: string | null
 }
 
 type StudentWithTuition = Student & {
@@ -299,7 +303,7 @@ export default function TuitionPage() {
     let studentsData: Student[] | null = null
     let plans: TuitionPlan[] = []
     let payments: TuitionPayment[] = []
-    let schedules: { student_id: string; purpose: string; amount: number; interval_type: string; interval_count: number }[] = []
+    let schedules: { id: string; student_id: string; purpose: string; amount: number; interval_type: string; interval_count: number; total_payments: number | null; payment_method_id: string | null }[] = []
     try {
       // Fetched one at a time, not in parallel — running these concurrently was
       // hitting a connection cap on some networks and silently dropping the
@@ -342,7 +346,7 @@ export default function TuitionPage() {
       schedules = await withRetry('payment_schedules', async () => {
         const { data, error } = await supabase
           .from('payment_schedules')
-          .select('student_id,purpose,amount,interval_type,interval_count')
+          .select('id,student_id,purpose,amount,interval_type,interval_count,total_payments,payment_method_id')
           .eq('status', 'active')
           .not('student_id', 'is', null)
         if (error) throw error
@@ -381,7 +385,11 @@ export default function TuitionPage() {
 
       const activeSchedules: ActiveSchedule[] = schedules
         .filter(sch => sch.student_id === s.id)
-        .map(sch => ({ purpose: sch.purpose, amount: Number(sch.amount), intervalType: sch.interval_type, intervalCount: sch.interval_count }))
+        .map(sch => ({
+          id: sch.id, purpose: sch.purpose, amount: Number(sch.amount),
+          intervalType: sch.interval_type, intervalCount: sch.interval_count,
+          totalPayments: sch.total_payments, paymentMethodId: sch.payment_method_id,
+        }))
 
       return {
         ...s,
@@ -825,7 +833,7 @@ export default function TuitionPage() {
       {loading ? (
         <div className="text-center py-12 text-slate-400 text-sm">Loading…</div>
       ) : tab === 'all' ? (
-        <TuitionTable students={filtered} />
+        <TuitionTable students={filtered} onDataChanged={loadData} />
       ) : tab === 'semester_due' || tab === 'month_due' ? (
         <div className="space-y-5">
           <p className="text-xs text-slate-400 italic">
@@ -895,7 +903,7 @@ export default function TuitionPage() {
                     />
                   </div>
                 </div>
-                <TuitionTable students={group} />
+                <TuitionTable students={group} onDataChanged={loadData} />
               </div>
             )
           })}
@@ -905,7 +913,22 @@ export default function TuitionPage() {
   )
 }
 
-function TuitionTable({ students }: { students: StudentWithTuition[] }) {
+function TuitionTable({ students, onDataChanged }: { students: StudentWithTuition[]; onDataChanged: () => void }) {
+  const supabase = createClient()
+  const [manageStudentId, setManageStudentId] = useState<string | null>(null)
+  const [manageSavedMethods, setManageSavedMethods] = useState<{ id: string; label: string }[]>([])
+
+  // Saved payment methods are only needed once staff actually open the
+  // "Update Card" step, not for every student on a list page that can have
+  // dozens of rows — fetched on demand for just the one being managed.
+  async function openManageRecurring(studentId: string) {
+    setManageStudentId(studentId)
+    const { data } = await supabase.from('payment_methods').select('id,label').eq('student_id', studentId)
+    setManageSavedMethods((data ?? []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
+  }
+
+  const manageStudent = students.find(s => s.id === manageStudentId)
+
   return (
     <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
       <div className="overflow-x-auto">
@@ -936,13 +959,14 @@ function TuitionTable({ students }: { students: StudentWithTuition[] }) {
                       {currentGradeLevel(s.grade_level, s.came_semester)}{s.student_id && ` · ${s.student_id}`}
                     </p>
                     {s.activeSchedules.length > 0 && (
-                      <p
-                        className="inline-flex items-center gap-1 text-xs text-blue-600 font-medium mt-0.5"
+                      <button
+                        onClick={e => { e.preventDefault(); e.stopPropagation(); openManageRecurring(s.id) }}
+                        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium mt-0.5"
                         title={s.activeSchedules.map(scheduleSummary).join('\n')}
                       >
                         <Repeat size={11} />
                         {s.activeSchedules.map(sch => SCHEDULE_PURPOSE_LABEL[sch.purpose] ?? sch.purpose).join(', ')}
-                      </p>
+                      </button>
                     )}
                   </div>
                 </Link>
@@ -997,6 +1021,19 @@ function TuitionTable({ students }: { students: StudentWithTuition[] }) {
       </div>
       {students.length === 0 && (
         <div className="text-center py-12 text-slate-400 text-sm">No students found.</div>
+      )}
+      {manageStudent && (
+        <ManageRecurringModal
+          onClose={() => setManageStudentId(null)}
+          type="student"
+          schedules={manageStudent.activeSchedules.map(sch => ({
+            id: sch.id, purpose: sch.purpose, amount: sch.amount,
+            interval_type: sch.intervalType, interval_count: sch.intervalCount,
+            total_payments: sch.totalPayments, payment_method_id: sch.paymentMethodId,
+          }))}
+          savedMethods={manageSavedMethods}
+          onChanged={onDataChanged}
+        />
       )}
     </div>
   )

@@ -3,8 +3,10 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Search, Plus, X, User, Mail, Phone, MapPin, Tag, Heart, Grid3x3, List, Users } from 'lucide-react'
+import { Search, Plus, X, User, Mail, Phone, MapPin, Tag, Heart, Grid3x3, List, Users, Repeat } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
+import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
+import { formatCurrency } from '@/lib/currency'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
 import TitleSelect from '@/components/TitleSelect'
@@ -34,12 +36,18 @@ type Donor = {
 
 type ViewMode = 'list' | 'card'
 type GroupBy = 'none' | 'category' | 'relationship'
+type DonorSchedule = {
+  id: string; donor_id: string; purpose: string; amount: number
+  interval_type: string; interval_count: number
+  total_payments: number | null; payment_method_id: string | null
+}
 
 export default function DonorsPage() {
   const router = useRouter()
   const supabase = createClient()
 
   const [donors, setDonors] = useState<Donor[]>([])
+  const [schedules, setSchedules] = useState<DonorSchedule[]>([])
   const [donorCategories, setDonorCategories] = useState<string[]>(['General'])
   const [relationships, setRelationships] = useState<string[]>(['Other'])
   const [searchTerm, setSearchTerm] = useState('')
@@ -78,8 +86,14 @@ export default function DonorsPage() {
 
   const fetchDonors = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase.from('donors').select('*').order('name')
+    const [{ data }, { data: sch }] = await Promise.all([
+      supabase.from('donors').select('*').order('name'),
+      supabase.from('payment_schedules')
+        .select('id,donor_id,purpose,amount,interval_type,interval_count,total_payments,payment_method_id')
+        .eq('status', 'active').not('donor_id', 'is', null),
+    ])
     setDonors(data || [])
+    setSchedules(sch || [])
     setLoading(false)
   }, [supabase])
 
@@ -293,7 +307,7 @@ export default function DonorsPage() {
                 </div>
               </div>
               {viewMode === 'list' ? (
-                <DonorTable donors={groupDonors} onNavigate={id => router.push(`/admin/donors/${id}`)} searchTerm={searchTerm} />
+                <DonorTable donors={groupDonors} schedules={schedules} onNavigate={id => router.push(`/admin/donors/${id}`)} searchTerm={searchTerm} onDataChanged={fetchDonors} />
               ) : (
                 <div className="p-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                   {groupDonors.map(donor => (
@@ -305,7 +319,7 @@ export default function DonorsPage() {
           ))}
         </div>
       ) : viewMode === 'list' ? (
-        <DonorTable donors={filtered} onNavigate={id => router.push(`/admin/donors/${id}`)} searchTerm={searchTerm} />
+        <DonorTable donors={filtered} schedules={schedules} onNavigate={id => router.push(`/admin/donors/${id}`)} searchTerm={searchTerm} onDataChanged={fetchDonors} />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {filtered.map(donor => (
@@ -322,7 +336,25 @@ export default function DonorsPage() {
   )
 }
 
-function DonorTable({ donors, onNavigate, searchTerm }: { donors: Donor[]; onNavigate: (id: string) => void; searchTerm: string }) {
+function scheduleCadence(s: DonorSchedule) {
+  const amt = formatCurrency(s.amount)
+  return s.interval_count === 1 ? `${amt} / ${s.interval_type}` : `${amt} every ${s.interval_count} ${s.interval_type}s`
+}
+
+function DonorTable({ donors, schedules, onNavigate, searchTerm, onDataChanged }: {
+  donors: Donor[]; schedules: DonorSchedule[]; onNavigate: (id: string) => void; searchTerm: string; onDataChanged: () => void
+}) {
+  const supabase = createClient()
+  const [manageDonorId, setManageDonorId] = useState<string | null>(null)
+  const [manageSavedMethods, setManageSavedMethods] = useState<{ id: string; label: string }[]>([])
+
+  async function openManageRecurring(donorId: string) {
+    setManageDonorId(donorId)
+    const { data } = await supabase.from('payment_methods').select('id,label').eq('donor_id', donorId)
+    setManageSavedMethods((data ?? []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
+  }
+  const manageDonorSchedules = schedules.filter(s => s.donor_id === manageDonorId)
+
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
       <table className="w-full text-sm">
@@ -335,13 +367,27 @@ function DonorTable({ donors, onNavigate, searchTerm }: { donors: Donor[]; onNav
           </tr>
         </thead>
         <tbody>
-          {donors.map(donor => (
+          {donors.map(donor => {
+            const donorSchedules = schedules.filter(s => s.donor_id === donor.id)
+            return (
             <tr key={donor.id} onClick={() => onNavigate(donor.id)}
               className="border-b border-slate-50 hover:bg-slate-50 cursor-pointer transition">
               <td className="px-5 py-3">
                 <div className="flex items-center gap-3">
                   <div className="bg-blue-100 p-1.5 rounded-lg"><User className="text-blue-600" size={16} /></div>
-                  <span className="font-medium text-slate-900">{donor.title ? `${donor.title} ` : ''}{donor.name}</span>
+                  <div>
+                    <span className="font-medium text-slate-900">{donor.title ? `${donor.title} ` : ''}{donor.name}</span>
+                    {donorSchedules.length > 0 && (
+                      <button
+                        onClick={e => { e.stopPropagation(); openManageRecurring(donor.id) }}
+                        title={donorSchedules.map(s => `${s.purpose}: ${scheduleCadence(s)}`).join('\n')}
+                        className="flex items-center gap-1 text-xs text-violet-600 hover:text-violet-700 font-medium mt-0.5"
+                      >
+                        <Repeat size={10} />
+                        {donorSchedules.length === 1 ? scheduleCadence(donorSchedules[0]) : `${donorSchedules.length} active recurring`}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </td>
               <td className="px-5 py-3 hidden md:table-cell text-slate-600">
@@ -364,7 +410,7 @@ function DonorTable({ donors, onNavigate, searchTerm }: { donors: Donor[]; onNav
                 )}
               </td>
             </tr>
-          ))}
+          )})}
           {!donors.length && (
             <tr><td colSpan={4} className="px-5 py-10 text-center text-slate-400">
               {searchTerm ? 'No donors match your search.' : 'No donors yet. Add your first donor.'}
@@ -372,6 +418,16 @@ function DonorTable({ donors, onNavigate, searchTerm }: { donors: Donor[]; onNav
           )}
         </tbody>
       </table>
+      {manageDonorId && manageDonorSchedules.length > 0 && (
+        <ManageRecurringModal
+          onClose={() => setManageDonorId(null)}
+          type="donor"
+          schedules={manageDonorSchedules}
+          savedMethods={manageSavedMethods}
+          initialScheduleId={manageDonorSchedules.length === 1 ? manageDonorSchedules[0].id : undefined}
+          onChanged={onDataChanged}
+        />
+      )}
     </div>
   )
 }

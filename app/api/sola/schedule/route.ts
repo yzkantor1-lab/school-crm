@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { createSchedule, cancelSchedule, isTestMode, listAllSchedules } from '@/lib/sola/client'
+import { createSchedule, cancelSchedule, updateScheduleDetails, isTestMode, listAllSchedules } from '@/lib/sola/client'
 import { resolveSolaCustomer, resolvePaymentMethod, type NewPaymentMethodInput } from '@/lib/sola/context'
 
 type ScheduleBody = {
@@ -134,6 +134,79 @@ export async function GET(req: Request) {
     totalPayments: live.totalPayments ?? schedule.total_payments,
     nextScheduledRunTime: live.nextScheduledRunTime ?? null,
   })
+}
+
+type PatchBody = {
+  id: string   // local payment_schedules.id
+  amount?: number
+  intervalType?: 'day' | 'week' | 'month' | 'year'
+  intervalCount?: number
+  totalPayments?: number | null   // null explicitly clears a fixed-#-of-payments cap
+  paymentMethodId?: string
+  newPaymentMethod?: NewPaymentMethodInput
+  save?: boolean
+}
+
+// Edits an active schedule in place — amount, cadence, payment count, and/or
+// which payment method it charges — instead of the only prior option
+// (cancel and recreate from scratch, which loses payment history
+// association and momentarily has no schedule running at all).
+export async function PATCH(req: Request) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const body = (await req.json().catch(() => null)) as PatchBody | null
+  if (!body?.id) return NextResponse.json({ error: 'id is required.' }, { status: 400 })
+
+  const { data: schedule, error: fetchError } = await supabase
+    .from('payment_schedules').select('sola_schedule_id,student_id,donor_id,status').eq('id', body.id).single()
+  if (fetchError || !schedule) return NextResponse.json({ error: 'Schedule not found.' }, { status: 404 })
+  if (schedule.status !== 'active') return NextResponse.json({ error: 'This schedule is no longer active.' }, { status: 400 })
+
+  const ownerType: 'student' | 'donor' = schedule.student_id ? 'student' : 'donor'
+  const ownerId = schedule.student_id ?? schedule.donor_id!
+
+  let solaPaymentMethodId: string | undefined
+  let localPaymentMethodId: string | null | undefined
+  if (body.paymentMethodId || body.newPaymentMethod) {
+    const customer = await resolveSolaCustomer(supabase, ownerType, ownerId)
+    if (!customer.ok) return NextResponse.json({ error: customer.error }, { status: 404 })
+    const method = await resolvePaymentMethod(supabase, {
+      type: ownerType, id: ownerId, solaCustomerId: customer.solaCustomerId,
+      paymentMethodId: body.paymentMethodId, newPaymentMethod: body.newPaymentMethod, save: body.save,
+    })
+    if (!method.ok) return NextResponse.json({ error: method.error }, { status: 502 })
+    solaPaymentMethodId = method.solaPaymentMethodId
+    localPaymentMethodId = method.localPaymentMethodId
+  }
+
+  // Simulated schedules (test mode) never existed in Sola — nothing to call
+  // there, just update the local row directly.
+  if (!schedule.sola_schedule_id.startsWith('TEST-SCHED-')) {
+    const updated = await updateScheduleDetails(schedule.sola_schedule_id, {
+      amount: body.amount,
+      intervalType: body.intervalType,
+      intervalCount: body.intervalCount,
+      totalPayments: body.totalPayments,
+      paymentMethodId: solaPaymentMethodId,
+    })
+    if (!updated.ok) return NextResponse.json({ error: updated.error }, { status: 502 })
+  }
+
+  const localChanges: Record<string, unknown> = {}
+  if (body.amount !== undefined) localChanges.amount = body.amount
+  if (body.intervalType !== undefined) localChanges.interval_type = body.intervalType
+  if (body.intervalCount !== undefined) localChanges.interval_count = body.intervalCount
+  if (body.totalPayments !== undefined) localChanges.total_payments = body.totalPayments
+  if (localPaymentMethodId !== undefined) localChanges.payment_method_id = localPaymentMethodId
+
+  if (Object.keys(localChanges).length) {
+    const { error: updateError } = await supabase.from('payment_schedules').update(localChanges).eq('id', body.id)
+    if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 })
+  }
+
+  return NextResponse.json({ ok: true })
 }
 
 export async function DELETE(req: Request) {
