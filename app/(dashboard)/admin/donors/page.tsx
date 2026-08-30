@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Search, Plus, X, User, Mail, Phone, MapPin, Tag, Heart, Grid3x3, List, Users, Repeat } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
 import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
+import IncomingSolaBadge from '@/components/sola/IncomingSolaBadge'
 import { formatCurrency } from '@/lib/currency'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
@@ -48,6 +49,7 @@ export default function DonorsPage() {
 
   const [donors, setDonors] = useState<Donor[]>([])
   const [schedules, setSchedules] = useState<DonorSchedule[]>([])
+  const [pendingSola, setPendingSola] = useState<Map<string, { count: number; total: number }>>(new Map())
   const [donorCategories, setDonorCategories] = useState<string[]>(['General'])
   const [relationships, setRelationships] = useState<string[]>(['Other'])
   const [searchTerm, setSearchTerm] = useState('')
@@ -86,14 +88,37 @@ export default function DonorsPage() {
 
   const fetchDonors = useCallback(async () => {
     setLoading(true)
-    const [{ data }, { data: sch }] = await Promise.all([
+    const [{ data }, { data: sch }, { data: syncCustomers }] = await Promise.all([
       supabase.from('donors').select('*').order('name'),
       supabase.from('payment_schedules')
         .select('id,donor_id,purpose,amount,interval_type,interval_count,total_payments,payment_method_id')
         .eq('status', 'active').not('donor_id', 'is', null),
+      supabase.from('sola_sync_customers').select('id,matched_donor_id').not('matched_donor_id', 'is', null),
     ])
     setDonors(data || [])
     setSchedules(sch || [])
+
+    // Real (approved) Sola money that's landed for a matched donor but hasn't
+    // been reviewed into a donations row yet — see IncomingSolaPayments.
+    const donorByCustomerId = new Map((syncCustomers ?? []).map(c => [c.id, c.matched_donor_id as string]))
+    const customerIds = (syncCustomers ?? []).map(c => c.id)
+    if (customerIds.length) {
+      const { data: pending } = await supabase
+        .from('sola_sync_payments').select('sola_sync_customer_id,amount')
+        .in('sola_sync_customer_id', customerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
+      const map = new Map<string, { count: number; total: number }>()
+      for (const p of pending ?? []) {
+        const donorId = donorByCustomerId.get(p.sola_sync_customer_id)
+        if (!donorId) continue
+        const cur = map.get(donorId) ?? { count: 0, total: 0 }
+        cur.count++; cur.total += Number(p.amount ?? 0)
+        map.set(donorId, cur)
+      }
+      setPendingSola(map)
+    } else {
+      setPendingSola(new Map())
+    }
+
     setLoading(false)
   }, [supabase])
 
@@ -307,7 +332,7 @@ export default function DonorsPage() {
                 </div>
               </div>
               {viewMode === 'list' ? (
-                <DonorTable donors={groupDonors} schedules={schedules} onNavigate={id => router.push(`/admin/donors/${id}`)} searchTerm={searchTerm} onDataChanged={fetchDonors} />
+                <DonorTable donors={groupDonors} schedules={schedules} pendingSola={pendingSola} onNavigate={id => router.push(`/admin/donors/${id}`)} searchTerm={searchTerm} onDataChanged={fetchDonors} />
               ) : (
                 <div className="p-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                   {groupDonors.map(donor => (
@@ -319,7 +344,7 @@ export default function DonorsPage() {
           ))}
         </div>
       ) : viewMode === 'list' ? (
-        <DonorTable donors={filtered} schedules={schedules} onNavigate={id => router.push(`/admin/donors/${id}`)} searchTerm={searchTerm} onDataChanged={fetchDonors} />
+        <DonorTable donors={filtered} schedules={schedules} pendingSola={pendingSola} onNavigate={id => router.push(`/admin/donors/${id}`)} searchTerm={searchTerm} onDataChanged={fetchDonors} />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {filtered.map(donor => (
@@ -341,8 +366,9 @@ function scheduleCadence(s: DonorSchedule) {
   return s.interval_count === 1 ? `${amt} / ${s.interval_type}` : `${amt} every ${s.interval_count} ${s.interval_type}s`
 }
 
-function DonorTable({ donors, schedules, onNavigate, searchTerm, onDataChanged }: {
-  donors: Donor[]; schedules: DonorSchedule[]; onNavigate: (id: string) => void; searchTerm: string; onDataChanged: () => void
+function DonorTable({ donors, schedules, pendingSola, onNavigate, searchTerm, onDataChanged }: {
+  donors: Donor[]; schedules: DonorSchedule[]; pendingSola: Map<string, { count: number; total: number }>
+  onNavigate: (id: string) => void; searchTerm: string; onDataChanged: () => void
 }) {
   const supabase = createClient()
   const [manageDonorId, setManageDonorId] = useState<string | null>(null)
@@ -377,16 +403,19 @@ function DonorTable({ donors, schedules, onNavigate, searchTerm, onDataChanged }
                   <div className="bg-blue-100 p-1.5 rounded-lg"><User className="text-blue-600" size={16} /></div>
                   <div>
                     <span className="font-medium text-slate-900">{donor.title ? `${donor.title} ` : ''}{donor.name}</span>
-                    {donorSchedules.length > 0 && (
-                      <button
-                        onClick={e => { e.stopPropagation(); openManageRecurring(donor.id) }}
-                        title={donorSchedules.map(s => `${s.purpose}: ${scheduleCadence(s)}`).join('\n')}
-                        className="flex items-center gap-1 text-xs text-violet-600 hover:text-violet-700 font-medium mt-0.5"
-                      >
-                        <Repeat size={10} />
-                        {donorSchedules.length === 1 ? scheduleCadence(donorSchedules[0]) : `${donorSchedules.length} active recurring`}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                      {donorSchedules.length > 0 && (
+                        <button
+                          onClick={e => { e.stopPropagation(); openManageRecurring(donor.id) }}
+                          title={donorSchedules.map(s => `${s.purpose}: ${scheduleCadence(s)}`).join('\n')}
+                          className="flex items-center gap-1 text-xs text-violet-600 hover:text-violet-700 font-medium"
+                        >
+                          <Repeat size={10} />
+                          {donorSchedules.length === 1 ? scheduleCadence(donorSchedules[0]) : `${donorSchedules.length} active recurring`}
+                        </button>
+                      )}
+                      <IncomingSolaBadge count={pendingSola.get(donor.id)?.count ?? 0} total={pendingSola.get(donor.id)?.total ?? 0} />
+                    </div>
                   </div>
                 </div>
               </td>

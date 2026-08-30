@@ -24,6 +24,7 @@ import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
 import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
 import RecalculateScheduleModal from '@/components/sola/RecalculateScheduleModal'
+import IncomingSolaPayments, { type PendingSolaPayment } from '@/components/sola/IncomingSolaPayments'
 
 type Student = {
   id: string
@@ -841,6 +842,7 @@ export default function StudentTuitionPage() {
   const [manageScheduleId, setManageScheduleId] = useState<string | null>(null)
   const [schedules, setSchedules] = useState<PaymentSchedule[]>([])
   const [parentDonations, setParentDonations] = useState<ParentDonation[]>([])
+  const [pendingSolaPayments, setPendingSolaPayments] = useState<PendingSolaPayment[]>([])
   const [recalcTarget, setRecalcTarget] = useState<{
     purpose: 'tuition' | 'building_fund'; purposeLabel: string; schedule: PaymentSchedule; remainingBalance: number
   } | null>(null)
@@ -901,6 +903,19 @@ export default function StudentTuitionPage() {
       } else {
         setParentDonations([])
       }
+
+      // Sola money that's already real (approved) but hasn't been reviewed
+      // into a tuition_payments row yet — see IncomingSolaPayments for why
+      // this is surfaced here instead of only on the Sola Sync queue.
+      const { data: syncCustomers } = await supabase.from('sola_sync_customers').select('id').eq('matched_student_id', studentId)
+      const syncCustomerIds = (syncCustomers ?? []).map(c => c.id)
+      const { data: pending } = syncCustomerIds.length
+        ? await supabase.from('sola_sync_payments')
+            .select('id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
+            .in('sola_sync_customer_id', syncCustomerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
+            .order('transaction_date')
+        : { data: [] as PendingSolaPayment[] }
+      setPendingSolaPayments((pending ?? []) as PendingSolaPayment[])
     } catch {
       // Network-level fetch failure (flaky connection, ad blocker) that
       // survived the Supabase client's own retries — surface a retry
@@ -1477,6 +1492,8 @@ export default function StudentTuitionPage() {
           </button>
         </div>
       </div>
+
+      <IncomingSolaPayments payments={pendingSolaPayments} />
 
       {showChargeModal && (
         <ChargeModal

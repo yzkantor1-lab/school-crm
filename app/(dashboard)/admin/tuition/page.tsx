@@ -8,6 +8,7 @@ import { Search, GraduationCap, Plus, ChevronRight, Filter, X, UserPlus, BookOpe
 import { formatCurrency } from '@/lib/currency'
 import ExportButton from '@/components/ExportButton'
 import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
+import IncomingSolaBadge from '@/components/sola/IncomingSolaBadge'
 import { SCHOOL_YEAR_SEMESTERS, currentGradeLevel } from '@/lib/semesters'
 
 // There's no per-installment schedule in the data — payments are only ever
@@ -170,6 +171,11 @@ type StudentWithTuition = Student & {
   // recurring charge was actually set up, instead of having to open each
   // student individually to check.
   activeSchedules: ActiveSchedule[]
+  // Real (approved) Sola money that's landed for this student's matched
+  // customer but hasn't been reviewed into tuition_payments yet — see
+  // components/sola/IncomingSolaPayments for why this is surfaced here too.
+  pendingSolaCount: number
+  pendingSolaTotal: number
   // computed for export
   activePlanYear: string
   activePlanStructure: string
@@ -304,6 +310,7 @@ export default function TuitionPage() {
     let plans: TuitionPlan[] = []
     let payments: TuitionPayment[] = []
     let schedules: { id: string; student_id: string; purpose: string; amount: number; interval_type: string; interval_count: number; total_payments: number | null; payment_method_id: string | null }[] = []
+    let pendingSolaByStudent: Map<string, { count: number; total: number }> = new Map()
     try {
       // Fetched one at a time, not in parallel — running these concurrently was
       // hitting a connection cap on some networks and silently dropping the
@@ -352,6 +359,27 @@ export default function TuitionPage() {
         if (error) throw error
         return data || []
       })
+      pendingSolaByStudent = await withRetry('sola_sync (pending)', async () => {
+        const { data: syncCustomers, error: cErr } = await supabase
+          .from('sola_sync_customers').select('id,matched_student_id').not('matched_student_id', 'is', null)
+        if (cErr) throw cErr
+        const studentByCustomerId = new Map((syncCustomers ?? []).map(c => [c.id, c.matched_student_id as string]))
+        const customerIds = (syncCustomers ?? []).map(c => c.id)
+        if (!customerIds.length) return new Map()
+        const { data: pending, error: pErr } = await supabase
+          .from('sola_sync_payments').select('sola_sync_customer_id,amount')
+          .in('sola_sync_customer_id', customerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
+        if (pErr) throw pErr
+        const map = new Map<string, { count: number; total: number }>()
+        for (const p of pending ?? []) {
+          const studentId = studentByCustomerId.get(p.sola_sync_customer_id)
+          if (!studentId) continue
+          const cur = map.get(studentId) ?? { count: 0, total: 0 }
+          cur.count++; cur.total += Number(p.amount ?? 0)
+          map.set(studentId, cur)
+        }
+        return map
+      })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setDebugInfo(`Couldn't load tuition data: ${msg}`)
@@ -391,6 +419,8 @@ export default function TuitionPage() {
           totalPayments: sch.total_payments, paymentMethodId: sch.payment_method_id,
         }))
 
+      const pendingSola = pendingSolaByStudent.get(s.id)
+
       return {
         ...s,
         activePlan,
@@ -398,6 +428,8 @@ export default function TuitionPage() {
         balance,
         priorOutstandingAmount,
         activeSchedules,
+        pendingSolaCount: pendingSola?.count ?? 0,
+        pendingSolaTotal: pendingSola?.total ?? 0,
         activePlanYear: activePlan?.academic_year ?? '',
         activePlanStructure: activePlan?.payment_structure ?? '',
         expected,
@@ -958,16 +990,19 @@ function TuitionTable({ students, onDataChanged }: { students: StudentWithTuitio
                     <p className="text-xs text-slate-400">
                       {currentGradeLevel(s.grade_level, s.came_semester)}{s.student_id && ` · ${s.student_id}`}
                     </p>
-                    {s.activeSchedules.length > 0 && (
-                      <button
-                        onClick={e => { e.preventDefault(); e.stopPropagation(); openManageRecurring(s.id) }}
-                        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium mt-0.5"
-                        title={s.activeSchedules.map(scheduleSummary).join('\n')}
-                      >
-                        <Repeat size={11} />
-                        {s.activeSchedules.map(sch => SCHEDULE_PURPOSE_LABEL[sch.purpose] ?? sch.purpose).join(', ')}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                      {s.activeSchedules.length > 0 && (
+                        <button
+                          onClick={e => { e.preventDefault(); e.stopPropagation(); openManageRecurring(s.id) }}
+                          className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium"
+                          title={s.activeSchedules.map(scheduleSummary).join('\n')}
+                        >
+                          <Repeat size={11} />
+                          {s.activeSchedules.map(sch => SCHEDULE_PURPOSE_LABEL[sch.purpose] ?? sch.purpose).join(', ')}
+                        </button>
+                      )}
+                      <IncomingSolaBadge count={s.pendingSolaCount} total={s.pendingSolaTotal} />
+                    </div>
                   </div>
                 </Link>
               </td>

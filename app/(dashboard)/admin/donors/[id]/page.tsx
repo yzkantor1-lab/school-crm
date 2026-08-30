@@ -18,6 +18,7 @@ import SentLettersPanel from '@/components/SentLettersPanel'
 import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
 import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
+import IncomingSolaPayments, { type PendingSolaPayment } from '@/components/sola/IncomingSolaPayments'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
 import TitleSelect from '@/components/TitleSelect'
@@ -85,6 +86,7 @@ export default function DonorDetailPage() {
   } | null>(null)
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
   const [schedules, setSchedules] = useState<Schedule[]>([])
+  const [pendingSolaPayments, setPendingSolaPayments] = useState<PendingSolaPayment[]>([])
   const [showChargeModal, setShowChargeModal] = useState(false)
   const [showRecurringModal, setShowRecurringModal] = useState(false)
   const [showManageRecurring, setShowManageRecurring] = useState(false)
@@ -122,6 +124,20 @@ export default function DonorDetailPage() {
     setDonations((dn ?? []) as unknown as Donation[])
     setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
     setSchedules(sch ?? [])
+
+    // Sola money that's already real (approved) but hasn't been reviewed
+    // into a donations row yet — see IncomingSolaPayments for why this is
+    // surfaced here instead of only on the Sola Sync queue.
+    const { data: syncCustomers } = await supabase.from('sola_sync_customers').select('id').eq('matched_donor_id', id)
+    const syncCustomerIds = (syncCustomers ?? []).map(c => c.id)
+    const { data: pending } = syncCustomerIds.length
+      ? await supabase.from('sola_sync_payments')
+          .select('id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
+          .in('sola_sync_customer_id', syncCustomerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
+          .order('transaction_date')
+      : { data: [] as PendingSolaPayment[] }
+    setPendingSolaPayments((pending ?? []) as PendingSolaPayment[])
+
     setLoading(false)
   }, [id, supabase])
 
@@ -388,6 +404,8 @@ export default function DonorDetailPage() {
         <p className="text-4xl font-bold">{formatCurrency(totalDonated)}</p>
         <p className="text-green-100 text-sm mt-1">{donations.length} donation{donations.length !== 1 ? 's' : ''}</p>
       </div>
+
+      <IncomingSolaPayments payments={pendingSolaPayments} />
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <div className="flex items-center justify-between mb-4">
