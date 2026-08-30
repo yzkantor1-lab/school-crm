@@ -924,7 +924,7 @@ export default function StudentTuitionPage() {
       const syncCustomerIds = (syncCustomers ?? []).map(c => c.id)
       if (!syncCustomerIds.length) return
       const { data: pending } = await supabase.from('sola_sync_payments')
-        .select('id,sola_sync_customer_id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
+        .select('id,sola_sync_customer_id,sola_sync_schedule_id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
         .in('sola_sync_customer_id', syncCustomerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
         .order('transaction_date')
       setPendingSolaPayments((pending ?? []) as PendingSolaPayment[])

@@ -8,6 +8,7 @@ import { formatCurrency } from '@/lib/currency'
 export type PendingSolaPayment = {
   id: string
   sola_sync_customer_id: string
+  sola_sync_schedule_id: string | null
   amount: number | null
   transaction_date: string | null
   charge_kind: 'tuition' | 'donation' | 'ambiguous'
@@ -21,7 +22,7 @@ type DonationCategory = 'monthly_recurring' | 'one_time' | 'event'
 type Plan = { id: string; academic_year: string | null }
 type EventOption = { id: string; name: string }
 
-type Decision = { kind: 'tuition' | 'donation' | null; feeType: FeeType; planId: string; category: DonationCategory; eventId: string }
+type Decision = { kind: 'tuition' | 'donation' | null; feeType: FeeType; planId: string; category: DonationCategory; eventId: string; confirmSchedule: boolean }
 
 function kindLabel(p: PendingSolaPayment) {
   if (p.charge_kind === 'ambiguous') return 'not sure yet'
@@ -40,6 +41,10 @@ function defaultDecision(p: PendingSolaPayment, defaultPlanId: string): Decision
     planId: defaultPlanId,
     category: (p.suggested_donation_category as DonationCategory) ?? 'one_time',
     eventId: '',
+    // Defaults on when this payment came from a real recurring schedule —
+    // that's almost always what staff want (stop re-reviewing every month),
+    // and it's a single checkbox to turn off for the rare exception.
+    confirmSchedule: !!p.sola_sync_schedule_id,
   }
 }
 
@@ -92,6 +97,25 @@ export default function IncomingSolaPayments({ payments, type, plans, events, on
       if (outcome && outcome.status !== 'imported' && outcome.status !== 'merged') {
         throw new Error(outcome.reason || `Couldn't import (${outcome.status}).`)
       }
+
+      // Confirm the schedule itself so future payments from it skip review
+      // entirely instead of needing this same decision made again next time
+      // — see isScheduleConfirmed in app/api/sola/sync/import/route.ts.
+      if (d.confirmSchedule && p.sola_sync_schedule_id) {
+        const confirmRes = await fetch('/api/sola/sync/set-default', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            d.kind === 'tuition'
+              ? { target: 'schedule', id: p.sola_sync_schedule_id, purpose: d.feeType, tuitionPlanId: d.feeType === 'registration_fee' ? null : (d.planId || null) }
+              : { target: 'schedule', id: p.sola_sync_schedule_id, purpose: 'donation', donationCategory: d.category }
+          ),
+        })
+        if (!confirmRes.ok) {
+          const j = await confirmRes.json().catch(() => null)
+          throw new Error(`Imported, but couldn't confirm the schedule: ${j?.error || 'unknown error'}`)
+        }
+      }
+
       onResolved()
     } catch (err) {
       setResult(r => ({ ...r, [p.id]: { type: 'error', msg: err instanceof Error ? err.message : 'Import failed.' } }))
@@ -184,6 +208,13 @@ export default function IncomingSolaPayments({ payments, type, plans, events, on
                   >
                     {busy && <Loader2 size={11} className="animate-spin" />} Import
                   </button>
+                  {p.sola_sync_schedule_id && d.kind && (
+                    <label className="flex items-center gap-1.5 text-amber-700 w-full pt-0.5">
+                      <input type="checkbox" checked={d.confirmSchedule} disabled={busy}
+                        onChange={e => setDecision(p.id, { confirmSchedule: e.target.checked }, d)} />
+                      Also apply to all future payments on this schedule — skip review next time
+                    </label>
+                  )}
                 </div>
               ) : (
                 <p className="text-amber-600 text-[11px]">Possible duplicate flagged — resolve on the Sola Sync page.</p>
