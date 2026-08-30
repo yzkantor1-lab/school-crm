@@ -1,5 +1,0 @@
-{
-  "crons": [
-    { "path": "/api/cron/sola-sync", "schedule": "*/20 * * * *" }
-  ]
-}
