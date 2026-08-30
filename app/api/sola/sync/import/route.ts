@@ -37,6 +37,14 @@ const daysBetween = (a: string, b: string) => Math.abs((new Date(a + 'T00:00:00'
 // many days out still counts as "possibly the same" is configurable in
 // Settings > Payments (payment_settings: sola/tuition_merge_window_days).
 //
+// That date-proximity check only exists because a raw Sola transaction on
+// its own doesn't say which family it's for beyond the schedule it's tied
+// to — but a schedule with a confirmed default (set-default, both fee type
+// AND tuition plan pinned) already answers that with certainty. For those,
+// isScheduleConfirmed below skips the near-match review entirely: no date
+// guessing needed once the schedule itself has been vetted once. Families
+// with no predictable payment date rely on this, not the day-window.
+//
 // Donations: NEVER auto-merged or auto-skipped on a fuzzy match. A same
 // donor+amount+month match is surfaced as 'needs_review' with a pointer to
 // what it might duplicate, and stays there until a human resolves it via
@@ -75,6 +83,12 @@ export async function POST(req: Request) {
     : { data: [] as { id: string; amount: number; payment_date: string | null; created_at: string; payment_type: string | null; tuition_plan_id: string | null }[] }
   const tuitionCandidatePool = [...(unlinkedPayments ?? [])]
 
+  // Confirmed-schedule lookup (see module comment) — only fetched when needed.
+  const { data: schedules } = needsTuitionPool
+    ? await supabase.from('sola_sync_schedules').select('id,default_purpose,default_tuition_plan_id').eq('sola_sync_customer_id', body.syncCustomerId)
+    : { data: [] as { id: string; default_purpose: string | null; default_tuition_plan_id: string | null }[] }
+  const scheduleById = new Map((schedules ?? []).map(s => [s.id, s]))
+
   const results: Result[] = []
 
   for (const decision of body.decisions) {
@@ -98,14 +112,23 @@ export async function POST(req: Request) {
       }
       if (!decision.feeType) { results.push({ syncPaymentId: decision.syncPaymentId, status: 'failed', reason: 'A fee type is required.' }); continue }
       const isRegFee = decision.feeType === 'registration_fee'
-      if (!isRegFee && (!decision.tuitionPlanId || !validPlanIds.has(decision.tuitionPlanId))) {
+
+      // A schedule with a confirmed default (both fee type and plan pinned
+      // via set-default) is authoritative — trust its own plan over whatever
+      // the client sent, since that's the one-time confirmation this exists
+      // to avoid asking for again.
+      const schedule = payment.sola_sync_schedule_id ? scheduleById.get(payment.sola_sync_schedule_id) : undefined
+      const isScheduleConfirmed = !!schedule && schedule.default_purpose === decision.feeType && (isRegFee || !!schedule.default_tuition_plan_id)
+      const tuitionPlanId = isScheduleConfirmed && !isRegFee ? schedule!.default_tuition_plan_id : decision.tuitionPlanId
+
+      if (!isRegFee && (!tuitionPlanId || !validPlanIds.has(tuitionPlanId))) {
         results.push({ syncPaymentId: decision.syncPaymentId, status: 'failed', reason: 'A tuition plan on this student must be selected for tuition/building fund payments.' })
         continue
       }
 
       const fuzzyIdx = tuitionCandidatePool.findIndex(existing =>
         existing.payment_type === decision.feeType &&
-        (isRegFee ? existing.tuition_plan_id == null : existing.tuition_plan_id === decision.tuitionPlanId) &&
+        (isRegFee ? existing.tuition_plan_id == null : existing.tuition_plan_id === tuitionPlanId) &&
         Number(existing.amount) === Number(payment.amount) &&
         monthKey(existing.payment_date) === monthKey(payment.transaction_date)
       )
@@ -131,12 +154,14 @@ export async function POST(req: Request) {
       // nearby in time (within the configured window), don't silently assume
       // it's unrelated either. Flag it for a human call instead of guessing
       // either way. Closest by date wins if more than one candidate qualifies.
-      if (payment.transaction_date) {
+      // Skipped entirely for a confirmed schedule — its identity already
+      // settles which family/plan this belongs to, no date guess needed.
+      if (payment.transaction_date && !isScheduleConfirmed) {
         let nearbyIdx = -1
         let nearbyDays = Infinity
         tuitionCandidatePool.forEach((existing, idx) => {
           if (existing.payment_type !== decision.feeType) return
-          if (isRegFee ? existing.tuition_plan_id != null : existing.tuition_plan_id !== decision.tuitionPlanId) return
+          if (isRegFee ? existing.tuition_plan_id != null : existing.tuition_plan_id !== tuitionPlanId) return
           if (Number(existing.amount) !== Number(payment.amount)) return
           if (!existing.payment_date) return
           const diff = daysBetween(existing.payment_date, payment.transaction_date!)
@@ -148,7 +173,7 @@ export async function POST(req: Request) {
           await supabase.from('sola_sync_payments').update({
             import_status: 'needs_review', charge_kind: 'tuition',
             duplicate_of_tuition_payment_id: nearby.id,
-            resolved_fee_type: decision.feeType, resolved_tuition_plan_id: isRegFee ? null : (decision.tuitionPlanId ?? null),
+            resolved_fee_type: decision.feeType, resolved_tuition_plan_id: isRegFee ? null : (tuitionPlanId ?? null),
           }).eq('id', payment.id)
           results.push({
             syncPaymentId: decision.syncPaymentId, status: 'needs_review',
@@ -159,7 +184,7 @@ export async function POST(req: Request) {
       }
 
       const { data: inserted, error: insertError } = await supabase.from('tuition_payments').insert([{
-        tuition_plan_id: isRegFee ? null : decision.tuitionPlanId,
+        tuition_plan_id: isRegFee ? null : tuitionPlanId,
         student_id: studentId, amount: payment.amount, payment_date: payment.transaction_date, status: 'paid',
         payment_type: decision.feeType, notes: 'Imported from Sola sync', sola_transaction_id: payment.sola_transaction_id,
       }]).select('id').single()

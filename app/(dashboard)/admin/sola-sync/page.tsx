@@ -46,6 +46,7 @@ type SyncSchedule = {
   next_scheduled_date: string | null
   default_purpose: DefaultPurpose | null
   default_donation_category: DonationCategory | null
+  default_tuition_plan_id: string | null
   linked_payment_schedule_id: string | null
 }
 
@@ -297,12 +298,12 @@ export default function SolaSyncPage() {
   // payments for this customer/schedule going forward — never touches
   // payments already staged (see classificationFromDefault in
   // app/api/sola/sync/run/route.ts).
-  async function setDefault(target: 'customer' | 'schedule', id: string, purpose: DefaultPurpose | null, donationCategory?: DonationCategory | null) {
+  async function setDefault(target: 'customer' | 'schedule', id: string, purpose: DefaultPurpose | null, donationCategory?: DonationCategory | null, tuitionPlanId?: string | null) {
     setBusyId(id)
     try {
       const res = await fetch('/api/sola/sync/set-default', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, id, purpose, donationCategory }),
+        body: JSON.stringify({ target, id, purpose, donationCategory, tuitionPlanId }),
       })
       if (!res.ok) { const j = await res.json().catch(() => null); alert(j?.error || 'Failed to set default.'); return }
       await load()
@@ -327,7 +328,13 @@ export default function SolaSyncPage() {
   function getDecision(payment: SyncPayment, studentId: string | null): Decision {
     const existing = decisions[payment.id]
     if (existing) return existing
-    const plan = studentId ? latestPlan(studentId, tuitionPlans) : null
+    // A confirmed schedule's own plan is authoritative — prefer it over
+    // guessing "the latest plan," since that's the whole point of confirming
+    // a schedule once (see isScheduleConfirmed in the import route).
+    const schedule = payment.sola_sync_schedule_id ? syncSchedules.find(s => s.id === payment.sola_sync_schedule_id) : undefined
+    const plan = schedule?.default_tuition_plan_id
+      ? tuitionPlans.find(pl => pl.id === schedule.default_tuition_plan_id)
+      : (studentId ? latestPlan(studentId, tuitionPlans) : null)
     return {
       kind: payment.charge_kind === 'ambiguous' ? null : payment.charge_kind,
       feeType: payment.suggested_fee_type ?? 'tuition',
@@ -611,6 +618,9 @@ export default function SolaSyncPage() {
                         <div className="space-y-1.5">
                           {customerSchedules.map(s => {
                             const scheduleBusy = busyId === s.id
+                            const schedulePlanOptions = c.matched_student_id ? tuitionPlans.filter(pl => pl.student_id === c.matched_student_id) : []
+                            const needsPlan = s.default_purpose === 'tuition' || s.default_purpose === 'building_fund'
+                            const scheduleConfirmed = s.default_purpose === 'registration_fee' || (needsPlan && !!s.default_tuition_plan_id)
                             return (
                               <div key={s.id} className="bg-slate-50 rounded-lg px-3 py-2 text-xs space-y-1.5">
                                 <div className="flex items-center justify-between flex-wrap gap-2">
@@ -626,7 +636,7 @@ export default function SolaSyncPage() {
                                 <div className="flex items-center gap-2 flex-wrap pt-1.5 border-t border-slate-200/70">
                                   <span className="text-[10px] uppercase tracking-wide text-slate-400">Future charges on this schedule</span>
                                   <select disabled={scheduleBusy} value={s.default_purpose ?? ''}
-                                    onChange={e => setDefault('schedule', s.id, (e.target.value || null) as DefaultPurpose | null, s.default_donation_category ?? 'monthly_recurring')}
+                                    onChange={e => setDefault('schedule', s.id, (e.target.value || null) as DefaultPurpose | null, s.default_donation_category ?? 'monthly_recurring', s.default_tuition_plan_id)}
                                     className="border border-slate-200 rounded px-1.5 py-0.5 text-xs bg-white disabled:opacity-50">
                                     <option value="">— classify automatically —</option>
                                     <option value="tuition">Tuition</option>
@@ -642,6 +652,24 @@ export default function SolaSyncPage() {
                                       <option value="one_time">One-Time</option>
                                       <option value="event">Event</option>
                                     </select>
+                                  )}
+                                  {needsPlan && (
+                                    schedulePlanOptions.length ? (
+                                      <select disabled={scheduleBusy} value={s.default_tuition_plan_id ?? ''}
+                                        onChange={e => setDefault('schedule', s.id, s.default_purpose, s.default_donation_category, e.target.value || null)}
+                                        className="border border-slate-200 rounded px-1.5 py-0.5 text-xs bg-white disabled:opacity-50 max-w-[9rem]">
+                                        <option value="">— which plan? —</option>
+                                        {schedulePlanOptions.map(pl => <option key={pl.id} value={pl.id}>{pl.academic_year || 'Plan'}</option>)}
+                                      </select>
+                                    ) : <span className="text-red-500">no plan on file</span>
+                                  )}
+                                  {needsPlan && !scheduleConfirmed && (
+                                    <span className="text-[10px] text-amber-600">pick a plan to confirm — still reviewed per payment until then</span>
+                                  )}
+                                  {scheduleConfirmed && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium" title="Future payments from this schedule import automatically, no date-matching review needed.">
+                                      ✓ Confirmed — future payments skip review
+                                    </span>
                                   )}
                                   {s.linked_payment_schedule_id ? (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">✓ Tracked as recurring</span>
