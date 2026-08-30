@@ -924,7 +924,7 @@ export default function StudentTuitionPage() {
       const syncCustomerIds = (syncCustomers ?? []).map(c => c.id)
       if (!syncCustomerIds.length) return
       const { data: pending } = await supabase.from('sola_sync_payments')
-        .select('id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
+        .select('id,sola_sync_customer_id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
         .in('sola_sync_customer_id', syncCustomerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
         .order('transaction_date')
       setPendingSolaPayments((pending ?? []) as PendingSolaPayment[])
@@ -1433,6 +1433,9 @@ export default function StudentTuitionPage() {
     (bfPayments.length > 0 && (bfBal?.buildingFundBalance ?? 0) <= 0.005 &&
       bfPayments.filter(p => COUNTS_AS_PAID.includes(p.status)).every(p => p.status === 'forgiven'))
 
+  // Current plan first so IncomingSolaPayments defaults an inline import to it.
+  const plansForSolaReview = currentPlan ? [currentPlan, ...plans.filter(p => p.id !== currentPlan.id)] : plans
+
   const phoneSchedules = schedules.filter(s => s.purpose === 'phone_charge')
   const tuitionSchedule = schedules.find(s => s.purpose === 'tuition' && s.status === 'active')
   const buildingFundSchedule = schedules.find(s => s.purpose === 'building_fund' && s.status === 'active')
@@ -1502,7 +1505,12 @@ export default function StudentTuitionPage() {
         </div>
       </div>
 
-      <IncomingSolaPayments payments={pendingSolaPayments} />
+      <IncomingSolaPayments
+        payments={pendingSolaPayments}
+        type="student"
+        plans={plansForSolaReview}
+        onResolved={() => { loadPendingSolaPayments(); load() }}
+      />
 
       {showChargeModal && (
         <ChargeModal

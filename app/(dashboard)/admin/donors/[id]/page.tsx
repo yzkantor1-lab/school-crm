@@ -139,7 +139,7 @@ export default function DonorDetailPage() {
       const syncCustomerIds = (syncCustomers ?? []).map(c => c.id)
       if (!syncCustomerIds.length) return
       const { data: pending } = await supabase.from('sola_sync_payments')
-        .select('id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
+        .select('id,sola_sync_customer_id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
         .in('sola_sync_customer_id', syncCustomerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
         .order('transaction_date')
       setPendingSolaPayments((pending ?? []) as PendingSolaPayment[])
@@ -414,7 +414,12 @@ export default function DonorDetailPage() {
         <p className="text-green-100 text-sm mt-1">{donations.length} donation{donations.length !== 1 ? 's' : ''}</p>
       </div>
 
-      <IncomingSolaPayments payments={pendingSolaPayments} />
+      <IncomingSolaPayments
+        payments={pendingSolaPayments}
+        type="donor"
+        events={events}
+        onResolved={() => { fetchPendingSolaPayments(); fetchData() }}
+      />
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <div className="flex items-center justify-between mb-4">
