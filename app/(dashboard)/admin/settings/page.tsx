@@ -612,11 +612,13 @@ function EmailTab() {
 }
 
 function PaymentsTab() {
-  const [state, setState] = useState<{ configured: boolean; masked?: string; updatedAt?: string; testMode: boolean } | null>(null)
+  const [state, setState] = useState<{ configured: boolean; masked?: string; updatedAt?: string; testMode: boolean; tuitionMergeWindowDays: number } | null>(null)
   const [editing, setEditing] = useState(false)
   const [keyInput, setKeyInput] = useState('')
   const [saving, setSaving] = useState(false)
   const [togglingTestMode, setTogglingTestMode] = useState(false)
+  const [mergeWindowInput, setMergeWindowInput] = useState('')
+  const [savingMergeWindow, setSavingMergeWindow] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
 
@@ -624,10 +626,29 @@ function PaymentsTab() {
     const res = await fetch('/api/sola-settings')
     const json = await res.json()
     setState(json)
+    setMergeWindowInput(String(json.tuitionMergeWindowDays ?? 30))
   }, [])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
   useEffect(() => { load() }, [load])
+
+  async function saveMergeWindow() {
+    const days = Number(mergeWindowInput)
+    if (!Number.isFinite(days) || days < 0 || days > 365) { setError('Enter a number of days between 0 and 365.'); return }
+    setSavingMergeWindow(true); setError('')
+    const res = await fetch('/api/sola-settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tuitionMergeWindowDays: days }),
+    })
+    const json = await res.json()
+    setSavingMergeWindow(false)
+    if (!res.ok) { setError(json.error || 'Failed to save.'); return }
+    setState(s => s ? { ...s, tuitionMergeWindowDays: json.tuitionMergeWindowDays } : s)
+    setMergeWindowInput(String(json.tuitionMergeWindowDays))
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2500)
+  }
 
   async function save() {
     if (!keyInput.trim()) { setError('Enter a key value.'); return }
@@ -715,6 +736,33 @@ function PaymentsTab() {
             The key is never displayed once saved — only the last 4 characters are shown, and it&apos;s stored where
             only this server can read it, never the browser.
           </p>
+        </div>
+      </div>
+
+      <div className="p-4 rounded-xl border border-slate-200 bg-slate-50">
+        <p className="text-sm font-medium text-slate-700">Sola Sync — tuition possible-match window</p>
+        <p className="text-xs text-slate-500 mt-0.5 max-w-xl">
+          When a Sola tuition payment matches an existing payment on amount and type but the date is off by more than
+          this many days, it&apos;s flagged for you to review (Same / Separate / Correction) instead of importing as
+          a brand-new payment. Payments in the same calendar month always auto-merge regardless of this setting.
+        </p>
+        <div className="flex items-center gap-2 mt-3">
+          <input
+            type="number"
+            min={0}
+            max={365}
+            value={mergeWindowInput}
+            onChange={e => setMergeWindowInput(e.target.value)}
+            className="w-20 border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <span className="text-xs text-slate-500">days</span>
+          <button
+            onClick={saveMergeWindow}
+            disabled={savingMergeWindow || Number(mergeWindowInput) === state.tuitionMergeWindowDays}
+            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+          >
+            {savingMergeWindow ? 'Saving…' : 'Save'}
+          </button>
         </div>
       </div>
 

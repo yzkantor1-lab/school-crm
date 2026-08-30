@@ -70,13 +70,14 @@ type SyncPayment = {
   tuition_payment_id: string | null
   donation_id: string | null
   duplicate_of_donation_id: string | null
+  duplicate_of_tuition_payment_id: string | null
 }
 
 type Student = { id: string; first_name: string; last_name: string }
 type Donor = { id: string; name: string }
 type EventOption = { id: string; name: string }
 type TuitionPlan = { id: string; student_id: string; academic_year: string | null; status: string | null }
-type ExistingTuitionPayment = { student_id: string; amount: number }
+type ExistingTuitionPayment = { id: string; student_id: string; amount: number; payment_date: string | null; payment_type: string | null }
 type ExistingDonation = { id: string; donor_id: string; amount: number; donation_date: string }
 
 type Decision = { kind: ChargeKind | null; feeType: FeeType; planId: string; category: DonationCategory; eventId: string }
@@ -211,8 +212,9 @@ export default function SolaSyncPage() {
     // request to that resource outright (confirmed live on the student
     // tuition page).
     setExistingPayments(matchedStudentIds.length
-      ? ((await supabase.from('students').select('id, tuition_payments(amount)').in('id', matchedStudentIds)).data ?? [])
-          .flatMap(s => ((s.tuition_payments ?? []) as { amount: number }[]).map(p => ({ student_id: s.id, amount: p.amount })))
+      ? ((await supabase.from('students').select('id, tuition_payments(id,amount,payment_date,payment_type)').in('id', matchedStudentIds)).data ?? [])
+          .flatMap(s => ((s.tuition_payments ?? []) as { id: string; amount: number; payment_date: string | null; payment_type: string | null }[])
+            .map(p => ({ student_id: s.id, id: p.id, amount: p.amount, payment_date: p.payment_date, payment_type: p.payment_type })))
       : [])
     const matchedDonorIds = (sc ?? []).map(c => c.matched_donor_id).filter((id): id is string => !!id)
     setExistingDonations(matchedDonorIds.length
@@ -435,7 +437,7 @@ export default function SolaSyncPage() {
         <SummaryCard label="Merged" value={summary.merged} accent="text-green-600" />
         <SummaryCard label="Tuition Awaiting Import" value={summary.pendingTuition} accent="text-amber-600" />
         <SummaryCard label="Donations Awaiting Import" value={summary.pendingDonations} accent="text-amber-600" />
-        <SummaryCard label="Duplicate Donations to Resolve" value={summary.needsReview} accent="text-red-600" />
+        <SummaryCard label="Possible Duplicates to Resolve" value={summary.needsReview} accent="text-red-600" />
         <SummaryCard label="Donors Matched" value={summary.donorCounts.matched} accent="text-violet-600" />
       </div>
 
@@ -830,6 +832,28 @@ export default function SolaSyncPage() {
                                             <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-center justify-between flex-wrap gap-2">
                                               <span className="text-red-800">
                                                 Might be the same as an existing {dup ? `${formatCurrency(Number(dup.amount))} donation on ${new Date(dup.donation_date + 'T00:00:00').toLocaleDateString()}` : 'donation'} already on file. Same donation, a separate one that happens to match, or a correction?
+                                              </span>
+                                              <div className="flex items-center gap-1.5">
+                                                <button disabled={resolvingId === p.id} onClick={() => resolveDuplicate(p.id, 'same')}
+                                                  className="text-xs bg-slate-600 hover:bg-slate-700 disabled:opacity-50 text-white px-2 py-1 rounded-lg font-medium">Same (skip)</button>
+                                                <button disabled={resolvingId === p.id} onClick={() => resolveDuplicate(p.id, 'separate')}
+                                                  className="text-xs bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-2 py-1 rounded-lg font-medium">Separate (import both)</button>
+                                                <button disabled={resolvingId === p.id} onClick={() => resolveDuplicate(p.id, 'correction')}
+                                                  className="text-xs bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-2 py-1 rounded-lg font-medium">Correction (update existing)</button>
+                                              </div>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      )
+                                    })()}
+                                    {p.import_status === 'needs_review' && p.duplicate_of_tuition_payment_id && (() => {
+                                      const dup = existingPayments.find(d => d.id === p.duplicate_of_tuition_payment_id)
+                                      return (
+                                        <tr key={`${p.id}-dup`}>
+                                          <td colSpan={7} className="pb-2">
+                                            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-center justify-between flex-wrap gap-2">
+                                              <span className="text-red-800">
+                                                Might be the same as an existing {dup ? `${formatCurrency(Number(dup.amount))} ${feeTypeLabel(dup.payment_type)} payment on ${dup.payment_date ? new Date(dup.payment_date + 'T00:00:00').toLocaleDateString() : 'an unknown date'}` : 'payment'} already on file, just off by a few days. Same payment, a separate one that happens to match, or a correction?
                                               </span>
                                               <div className="flex items-center gap-1.5">
                                                 <button disabled={resolvingId === p.id} onClick={() => resolveDuplicate(p.id, 'same')}

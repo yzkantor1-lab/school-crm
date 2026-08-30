@@ -17,6 +17,7 @@ type ResultStatus = 'imported' | 'merged' | 'needs_review' | 'failed'
 type Result = { syncPaymentId: string; status: ResultStatus; reason?: string }
 
 const monthKey = (d: string | null) => (d ? d.slice(0, 7) : null)
+const daysBetween = (a: string, b: string) => Math.abs((new Date(a + 'T00:00:00').getTime() - new Date(b + 'T00:00:00').getTime()) / 86400000)
 
 // Writes approved staged Sola payments into tuition_payments or donations,
 // depending on each decision's kind. A batch can freely mix tuition and
@@ -28,7 +29,13 @@ const monthKey = (d: string | null) => (d ? d.slice(0, 7) : null)
 // tuition_payments and merges rather than duplicating (see the dedup note
 // below) — this is safe to do silently because a wrong tuition merge just
 // means one payment record instead of two for what's almost certainly the
-// same monthly charge.
+// same monthly charge. When the amount/type match but the date falls outside
+// the same calendar month — Sola posting a payment a few days into the next
+// month, for example — it's no longer safe to silently assume it's the same
+// charge, so it's surfaced as 'needs_review' (same Same/Separate/Correction
+// flow as donations) instead of quietly creating a possible duplicate. How
+// many days out still counts as "possibly the same" is configurable in
+// Settings > Payments (payment_settings: sola/tuition_merge_window_days).
 //
 // Donations: NEVER auto-merged or auto-skipped on a fuzzy match. A same
 // donor+amount+month match is surfaced as 'needs_review' with a pointer to
@@ -48,6 +55,9 @@ export async function POST(req: Request) {
 
   const { data: syncCustomer } = await supabase.from('sola_sync_customers').select('*').eq('id', body.syncCustomerId).single()
   if (!syncCustomer) return NextResponse.json({ error: 'Sola sync customer not found.' }, { status: 404 })
+
+  const { data: mergeWindowRow } = await supabase.from('payment_settings').select('key_value').eq('provider', 'sola').eq('key_name', 'tuition_merge_window_days').maybeSingle()
+  const mergeWindowDays = Number(mergeWindowRow?.key_value ?? 30) || 30
 
   const studentId: string | null = syncCustomer.matched_student_id
   const donorId: string | null = syncCustomer.matched_donor_id
@@ -117,6 +127,37 @@ export async function POST(req: Request) {
         continue
       }
 
+      // No same-month match — but if there's a same-amount/same-type payment
+      // nearby in time (within the configured window), don't silently assume
+      // it's unrelated either. Flag it for a human call instead of guessing
+      // either way. Closest by date wins if more than one candidate qualifies.
+      if (payment.transaction_date) {
+        let nearbyIdx = -1
+        let nearbyDays = Infinity
+        tuitionCandidatePool.forEach((existing, idx) => {
+          if (existing.payment_type !== decision.feeType) return
+          if (isRegFee ? existing.tuition_plan_id != null : existing.tuition_plan_id !== decision.tuitionPlanId) return
+          if (Number(existing.amount) !== Number(payment.amount)) return
+          if (!existing.payment_date) return
+          const diff = daysBetween(existing.payment_date, payment.transaction_date!)
+          if (diff <= mergeWindowDays && diff < nearbyDays) { nearbyDays = diff; nearbyIdx = idx }
+        })
+        if (nearbyIdx !== -1) {
+          const nearby = tuitionCandidatePool[nearbyIdx]
+          tuitionCandidatePool.splice(nearbyIdx, 1)
+          await supabase.from('sola_sync_payments').update({
+            import_status: 'needs_review', charge_kind: 'tuition',
+            duplicate_of_tuition_payment_id: nearby.id,
+            resolved_fee_type: decision.feeType, resolved_tuition_plan_id: isRegFee ? null : (decision.tuitionPlanId ?? null),
+          }).eq('id', payment.id)
+          results.push({
+            syncPaymentId: decision.syncPaymentId, status: 'needs_review',
+            reason: `Might be the same as an existing ${formatMoney(nearby.amount)} payment on ${nearby.payment_date} (${Math.round(nearbyDays)} day${Math.round(nearbyDays) === 1 ? '' : 's'} off) — resolve in the Possible Duplicate Payments review below.`,
+          })
+          continue
+        }
+      }
+
       const { data: inserted, error: insertError } = await supabase.from('tuition_payments').insert([{
         tuition_plan_id: isRegFee ? null : decision.tuitionPlanId,
         student_id: studentId, amount: payment.amount, payment_date: payment.transaction_date, status: 'paid',
@@ -177,12 +218,14 @@ export async function POST(req: Request) {
     results.push({ syncPaymentId: decision.syncPaymentId, status: 'imported' })
   }
 
-  // The tuition side has a 'merged' state to reach once nothing's pending;
-  // the donor side doesn't need one — 'matched' already means "confirmed,"
-  // independent of whether every donation under it has been resolved yet.
+  // The tuition side has a 'merged' state to reach once nothing's pending or
+  // awaiting a possible-duplicate decision; the donor side doesn't need one —
+  // 'matched' already means "confirmed," independent of whether every
+  // donation under it has been resolved yet.
   const { count: pendingTuition } = await supabase
     .from('sola_sync_payments').select('id', { count: 'exact', head: true })
-    .eq('sola_sync_customer_id', body.syncCustomerId).eq('import_status', 'pending').eq('charge_kind', 'tuition')
+    .eq('sola_sync_customer_id', body.syncCustomerId).eq('charge_kind', 'tuition')
+    .in('import_status', ['pending', 'needs_review'])
   if (!pendingTuition && syncCustomer.match_status === 'matched') {
     await supabase.from('sola_sync_customers').update({ match_status: 'merged' }).eq('id', body.syncCustomerId)
   }
