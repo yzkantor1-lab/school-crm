@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { X, Loader2, Check, AlertCircle, Ban, ArrowRight, Pencil } from 'lucide-react'
+import { X, Loader2, Check, AlertCircle, Ban, ArrowRight, Pencil, FlagTriangleRight } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
 
 type ScheduleSummary = {
@@ -12,8 +12,16 @@ type ScheduleSummary = {
   interval_count: number
 }
 
-type Choice = 'stop' | 'keep' | 'change'
-type RowState = { choice: Choice; newAmount: string; status: 'idle' | 'saving' | 'done' | 'error'; error?: string }
+type Choice = 'stop' | 'keep' | 'change' | 'finish'
+type RowState = {
+  choice: Choice
+  newAmount: string
+  remainingBalance: string
+  paymentsProcessed: number | null
+  loadingProcessed: boolean
+  status: 'idle' | 'saving' | 'done' | 'error'
+  error?: string
+}
 
 const PURPOSE_LABEL: Record<string, string> = {
   tuition: 'Tuition', building_fund: 'Building Fund', phone_charge: 'Phone Charge', donation: 'Donation',
@@ -37,7 +45,10 @@ export default function GraduationScheduleModal({ studentName, schedules, onClos
   onDone: () => void
 }) {
   const [rows, setRows] = useState<Record<string, RowState>>(
-    Object.fromEntries(schedules.map(s => [s.id, { choice: 'stop' as Choice, newAmount: String(s.amount), status: 'idle' as const }]))
+    Object.fromEntries(schedules.map(s => [s.id, {
+      choice: 'stop' as Choice, newAmount: String(s.amount), remainingBalance: '',
+      paymentsProcessed: null, loadingProcessed: false, status: 'idle' as const,
+    }]))
   )
   const [submitting, setSubmitting] = useState(false)
   const [allDone, setAllDone] = useState(false)
@@ -46,12 +57,38 @@ export default function GraduationScheduleModal({ studentName, schedules, onClos
     setRows(r => ({ ...r, [id]: { ...r[id], ...patch } }))
   }
 
+  // "Finish plan": needs to know how many payments Sola has already run
+  // before it can compute where the cap should land — fetched lazily, only
+  // the first time a schedule is switched to this choice.
+  async function chooseFinish(s: ScheduleSummary) {
+    setRow(s.id, { choice: 'finish', status: 'idle' })
+    if (rows[s.id].paymentsProcessed != null || rows[s.id].loadingProcessed) return
+    setRow(s.id, { loadingProcessed: true })
+    try {
+      const res = await fetch(`/api/sola/schedule?id=${s.id}`)
+      const json = await res.json()
+      setRow(s.id, { paymentsProcessed: res.ok ? (json.paymentsProcessed ?? 0) : 0, loadingProcessed: false })
+    } catch {
+      setRow(s.id, { paymentsProcessed: 0, loadingProcessed: false })
+    }
+  }
+
+  function remainingPaymentsFor(s: ScheduleSummary, row: RowState): number {
+    const balance = Number(row.remainingBalance)
+    if (!balance || balance <= 0 || !s.amount) return 0
+    return Math.ceil(balance / s.amount)
+  }
+
   async function submit() {
     for (const s of schedules) {
       const row = rows[s.id]
       if (row.choice === 'keep') { setRow(s.id, { status: 'done' }); continue }
       if (row.choice === 'change' && (!row.newAmount || Number(row.newAmount) <= 0)) {
         setRow(s.id, { status: 'error', error: 'Enter a valid amount.' })
+        return
+      }
+      if (row.choice === 'finish' && remainingPaymentsFor(s, row) <= 0) {
+        setRow(s.id, { status: 'error', error: 'Enter the remaining balance still owed.' })
         return
       }
     }
@@ -65,6 +102,14 @@ export default function GraduationScheduleModal({ studentName, schedules, onClos
           const res = await fetch(`/api/sola/schedule?id=${s.id}`, { method: 'DELETE' })
           const json = await res.json().catch(() => ({}))
           if (!res.ok) throw new Error(json.error || 'Failed to stop.')
+        } else if (row.choice === 'finish') {
+          const totalPayments = (row.paymentsProcessed ?? 0) + remainingPaymentsFor(s, row)
+          const res = await fetch('/api/sola/schedule', {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: s.id, totalPayments }),
+          })
+          const json = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(json.error || 'Failed to set the payoff point.')
         } else {
           const res = await fetch('/api/sola/schedule', {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -107,14 +152,18 @@ export default function GraduationScheduleModal({ studentName, schedules, onClos
                   <span className="text-sm font-medium text-slate-800">{PURPOSE_LABEL[s.purpose] ?? s.purpose}</span>
                   <span className="text-xs text-slate-500">{cadenceLabel(s)}</span>
                 </div>
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5">
                   <button disabled={submitting} onClick={() => setRow(s.id, { choice: 'stop', status: 'idle' })}
                     className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50 ${row.choice === 'stop' ? 'bg-red-50 border-red-300 text-red-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-                    <Ban size={12} /> Stop
+                    <Ban size={12} /> Stop now
                   </button>
                   <button disabled={submitting} onClick={() => setRow(s.id, { choice: 'keep', status: 'idle' })}
                     className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50 ${row.choice === 'keep' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
                     <ArrowRight size={12} /> Leave running
+                  </button>
+                  <button disabled={submitting} onClick={() => chooseFinish(s)}
+                    className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50 ${row.choice === 'finish' ? 'bg-green-50 border-green-300 text-green-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                    <FlagTriangleRight size={12} /> Finish payment plan
                   </button>
                   <button disabled={submitting} onClick={() => setRow(s.id, { choice: 'change', status: 'idle' })}
                     className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50 ${row.choice === 'change' ? 'bg-amber-50 border-amber-300 text-amber-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
@@ -127,9 +176,27 @@ export default function GraduationScheduleModal({ studentName, schedules, onClos
                     placeholder="New amount per payment"
                     className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 )}
+                {row.choice === 'finish' && (
+                  <div className="space-y-1">
+                    <input type="number" step="0.01" min="0" disabled={submitting || row.loadingProcessed} value={row.remainingBalance}
+                      onChange={e => setRow(s.id, { remainingBalance: e.target.value })}
+                      placeholder="Remaining balance still owed"
+                      className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    {row.loadingProcessed ? (
+                      <p className="text-xs text-slate-400">Checking payments so far…</p>
+                    ) : remainingPaymentsFor(s, row) > 0 ? (
+                      <p className="text-xs text-green-700">
+                        {remainingPaymentsFor(s, row)} more payment{remainingPaymentsFor(s, row) === 1 ? '' : 's'} of {formatCurrency(s.amount)}
+                        {' '}(≈{formatCurrency(remainingPaymentsFor(s, row) * s.amount)}), then it stops automatically on its own — no need to remember to come back.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-400">Enter what&apos;s still owed to see how many payments are left.</p>
+                    )}
+                  </div>
+                )}
                 {row.status === 'done' && (
                   <p className="flex items-center gap-1 text-xs text-green-700">
-                    <Check size={12} /> {row.choice === 'stop' ? 'Stopped.' : row.choice === 'keep' ? 'Left running.' : 'Amount updated.'}
+                    <Check size={12} /> {row.choice === 'stop' ? 'Stopped.' : row.choice === 'keep' ? 'Left running.' : row.choice === 'finish' ? 'Payoff point set — will stop on its own after that.' : 'Amount updated.'}
                   </p>
                 )}
                 {row.status === 'error' && (
