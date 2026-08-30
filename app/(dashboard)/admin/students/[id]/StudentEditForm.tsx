@@ -8,6 +8,7 @@ import { loadGoogleMapsScript, type GoogleAutocomplete } from '@/lib/googleMaps'
 import SmartFormField from '@/components/SmartFormField'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
+import GraduationScheduleModal from '@/components/sola/GraduationScheduleModal'
 
 const field = (label: string, key: string, required = false) => ({ label, key, type: 'text', required })
 const dateField = (label: string, key: string) => ({ label, key, type: 'date', required: false })
@@ -460,6 +461,9 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
+  const [graduationSchedules, setGraduationSchedules] = useState<
+    { id: string; purpose: string; amount: number; interval_type: string; interval_count: number }[] | null
+  >(null)
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
 
@@ -518,18 +522,16 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
     const { error } = await supabase.from('students').update(withAddresses).eq('id', student!.id)
     if (error) { setError(error.message) } else { setSuccess(true); router.refresh() }
 
-    // Phone Charge is billed via a real Sola recurring schedule that runs on
-    // its own clock — "until graduated" only actually stops it if graduating
-    // a student cancels that schedule here. Best-effort: the save above
-    // already succeeded, so a cancellation hiccup shouldn't block or fail it
-    // — worst case, staff needs to notice and stop it manually on the
-    // Tuition page (the panel still exposes a Stop button either way).
-    if (!error && form.status === 'graduated') {
+    // Any recurring schedule (tuition, building fund, phone charge — any
+    // purpose) runs on Sola's own clock, so "graduated" doesn't stop billing
+    // by itself. Only prompt on the actual transition into 'graduated', not
+    // every subsequent save of an already-graduated profile — otherwise a
+    // deliberate "leave it running" choice (a continuing building fund
+    // pledge, say) would get re-asked on every edit.
+    if (!error && form.status === 'graduated' && student?.status !== 'graduated') {
       const { data: activeSchedules } = await supabase.from('payment_schedules')
-        .select('id').eq('student_id', student!.id).eq('purpose', 'phone_charge').eq('status', 'active')
-      for (const sched of activeSchedules ?? []) {
-        fetch(`/api/sola/schedule?id=${sched.id}`, { method: 'DELETE' }).catch(err => console.warn('Failed to auto-cancel Phone Charge on graduation:', err))
-      }
+        .select('id,purpose,amount,interval_type,interval_count').eq('student_id', student!.id).eq('status', 'active')
+      if (activeSchedules && activeSchedules.length > 0) setGraduationSchedules(activeSchedules)
     }
 
     setLoading(false)
@@ -542,6 +544,7 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
   }
 
   return (
+    <>
     <form onSubmit={handleSave} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 space-y-5">
 
       {/* Basic info */}
@@ -928,5 +931,14 @@ export default function StudentEditForm({ student }: { student?: StudentRow | nu
         )}
       </div>
     </form>
+    {graduationSchedules && (
+      <GraduationScheduleModal
+        studentName={[form.first_name, form.last_name].filter(Boolean).join(' ') || 'this student'}
+        schedules={graduationSchedules}
+        onClose={() => setGraduationSchedules(null)}
+        onDone={() => { setGraduationSchedules(null); router.refresh() }}
+      />
+    )}
+    </>
   )
 }
