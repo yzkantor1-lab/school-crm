@@ -171,11 +171,6 @@ type StudentWithTuition = Student & {
   // recurring charge was actually set up, instead of having to open each
   // student individually to check.
   activeSchedules: ActiveSchedule[]
-  // Real (approved) Sola money that's landed for this student's matched
-  // customer but hasn't been reviewed into tuition_payments yet — see
-  // components/sola/IncomingSolaPayments for why this is surfaced here too.
-  pendingSolaCount: number
-  pendingSolaTotal: number
   // computed for export
   activePlanYear: string
   activePlanStructure: string
@@ -268,6 +263,7 @@ export default function TuitionPage() {
   const [outstandingSemesterRows, setOutstandingSemesterRows] = useState<OutstandingRow[]>([])
   const [outstandingMonthRows, setOutstandingMonthRows] = useState<OutstandingRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [pendingSola, setPendingSola] = useState<Map<string, { count: number; total: number }>>(new Map())
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'has_plan' | 'no_plan'>('all')
   const [recurringFilter, setRecurringFilter] = useState<'all' | 'has_recurring' | 'no_recurring'>('all')
@@ -310,7 +306,6 @@ export default function TuitionPage() {
     let plans: TuitionPlan[] = []
     let payments: TuitionPayment[] = []
     let schedules: { id: string; student_id: string; purpose: string; amount: number; interval_type: string; interval_count: number; total_payments: number | null; payment_method_id: string | null }[] = []
-    let pendingSolaByStudent: Map<string, { count: number; total: number }> = new Map()
     try {
       // Fetched one at a time, not in parallel — running these concurrently was
       // hitting a connection cap on some networks and silently dropping the
@@ -359,27 +354,6 @@ export default function TuitionPage() {
         if (error) throw error
         return data || []
       })
-      pendingSolaByStudent = await withRetry('sola_sync (pending)', async () => {
-        const { data: syncCustomers, error: cErr } = await supabase
-          .from('sola_sync_customers').select('id,matched_student_id').not('matched_student_id', 'is', null)
-        if (cErr) throw cErr
-        const studentByCustomerId = new Map((syncCustomers ?? []).map(c => [c.id, c.matched_student_id as string]))
-        const customerIds = (syncCustomers ?? []).map(c => c.id)
-        if (!customerIds.length) return new Map()
-        const { data: pending, error: pErr } = await supabase
-          .from('sola_sync_payments').select('sola_sync_customer_id,amount')
-          .in('sola_sync_customer_id', customerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
-        if (pErr) throw pErr
-        const map = new Map<string, { count: number; total: number }>()
-        for (const p of pending ?? []) {
-          const studentId = studentByCustomerId.get(p.sola_sync_customer_id)
-          if (!studentId) continue
-          const cur = map.get(studentId) ?? { count: 0, total: 0 }
-          cur.count++; cur.total += Number(p.amount ?? 0)
-          map.set(studentId, cur)
-        }
-        return map
-      })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setDebugInfo(`Couldn't load tuition data: ${msg}`)
@@ -419,8 +393,6 @@ export default function TuitionPage() {
           totalPayments: sch.total_payments, paymentMethodId: sch.payment_method_id,
         }))
 
-      const pendingSola = pendingSolaByStudent.get(s.id)
-
       return {
         ...s,
         activePlan,
@@ -428,8 +400,6 @@ export default function TuitionPage() {
         balance,
         priorOutstandingAmount,
         activeSchedules,
-        pendingSolaCount: pendingSola?.count ?? 0,
-        pendingSolaTotal: pendingSola?.total ?? 0,
         activePlanYear: activePlan?.academic_year ?? '',
         activePlanStructure: activePlan?.payment_structure ?? '',
         expected,
@@ -494,6 +464,41 @@ export default function TuitionPage() {
     loadData()
   }, [loadData])
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Completely independent of loadData on purpose — some networks block
+  // requests to the sola_sync_* tables outright ("TypeError: Failed to
+  // fetch"), the same class of issue documented on the tuition_payments
+  // fetch above. This badge is a nice-to-have; it must never be able to take
+  // the whole page down if it fails, so it gets its own effect, its own
+  // state, and swallows any error rather than surfacing one.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { data: syncCustomers } = await supabase
+          .from('sola_sync_customers').select('id,matched_student_id').not('matched_student_id', 'is', null)
+        const studentByCustomerId = new Map((syncCustomers ?? []).map(c => [c.id, c.matched_student_id as string]))
+        const customerIds = (syncCustomers ?? []).map(c => c.id)
+        if (!customerIds.length) return
+        const { data: pending } = await supabase
+          .from('sola_sync_payments').select('sola_sync_customer_id,amount')
+          .in('sola_sync_customer_id', customerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
+        const map = new Map<string, { count: number; total: number }>()
+        for (const p of pending ?? []) {
+          const studentId = studentByCustomerId.get(p.sola_sync_customer_id)
+          if (!studentId) continue
+          const cur = map.get(studentId) ?? { count: 0, total: 0 }
+          cur.count++; cur.total += Number(p.amount ?? 0)
+          map.set(studentId, cur)
+        }
+        if (!cancelled) setPendingSola(map)
+      } catch {
+        // Best-effort — leave the badge showing nothing rather than blocking
+        // or erroring the page over a request some networks can't complete.
+      }
+    })()
+    return () => { cancelled = true }
+  }, [supabase])
 
   async function handleAddStudent(e: React.FormEvent) {
     e.preventDefault()
@@ -865,7 +870,7 @@ export default function TuitionPage() {
       {loading ? (
         <div className="text-center py-12 text-slate-400 text-sm">Loading…</div>
       ) : tab === 'all' ? (
-        <TuitionTable students={filtered} onDataChanged={loadData} />
+        <TuitionTable students={filtered} pendingSola={pendingSola} onDataChanged={loadData} />
       ) : tab === 'semester_due' || tab === 'month_due' ? (
         <div className="space-y-5">
           <p className="text-xs text-slate-400 italic">
@@ -935,7 +940,7 @@ export default function TuitionPage() {
                     />
                   </div>
                 </div>
-                <TuitionTable students={group} onDataChanged={loadData} />
+                <TuitionTable students={group} pendingSola={pendingSola} onDataChanged={loadData} />
               </div>
             )
           })}
@@ -945,7 +950,7 @@ export default function TuitionPage() {
   )
 }
 
-function TuitionTable({ students, onDataChanged }: { students: StudentWithTuition[]; onDataChanged: () => void }) {
+function TuitionTable({ students, pendingSola, onDataChanged }: { students: StudentWithTuition[]; pendingSola: Map<string, { count: number; total: number }>; onDataChanged: () => void }) {
   const supabase = createClient()
   const [manageStudentId, setManageStudentId] = useState<string | null>(null)
   const [manageSavedMethods, setManageSavedMethods] = useState<{ id: string; label: string }[]>([])
@@ -1001,7 +1006,7 @@ function TuitionTable({ students, onDataChanged }: { students: StudentWithTuitio
                           {s.activeSchedules.map(sch => SCHEDULE_PURPOSE_LABEL[sch.purpose] ?? sch.purpose).join(', ')}
                         </button>
                       )}
-                      <IncomingSolaBadge count={s.pendingSolaCount} total={s.pendingSolaTotal} />
+                      <IncomingSolaBadge count={pendingSola.get(s.id)?.count ?? 0} total={pendingSola.get(s.id)?.total ?? 0} />
                     </div>
                   </div>
                 </Link>

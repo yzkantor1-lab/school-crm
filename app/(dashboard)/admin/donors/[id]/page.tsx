@@ -124,21 +124,29 @@ export default function DonorDetailPage() {
     setDonations((dn ?? []) as unknown as Donation[])
     setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
     setSchedules(sch ?? [])
-
-    // Sola money that's already real (approved) but hasn't been reviewed
-    // into a donations row yet — see IncomingSolaPayments for why this is
-    // surfaced here instead of only on the Sola Sync queue.
-    const { data: syncCustomers } = await supabase.from('sola_sync_customers').select('id').eq('matched_donor_id', id)
-    const syncCustomerIds = (syncCustomers ?? []).map(c => c.id)
-    const { data: pending } = syncCustomerIds.length
-      ? await supabase.from('sola_sync_payments')
-          .select('id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
-          .in('sola_sync_customer_id', syncCustomerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
-          .order('transaction_date')
-      : { data: [] as PendingSolaPayment[] }
-    setPendingSolaPayments((pending ?? []) as PendingSolaPayment[])
-
     setLoading(false)
+  }, [id, supabase])
+
+  // Completely separate from fetchData on purpose — some networks block
+  // requests to the sola_sync_* tables outright ("TypeError: Failed to
+  // fetch"), the same class of issue already documented elsewhere in this
+  // codebase for tuition_payments. This card is a nice-to-have; it must
+  // never be able to take the whole page down if it fails, so it gets its
+  // own effect and swallows any error rather than surfacing one.
+  const fetchPendingSolaPayments = useCallback(async () => {
+    try {
+      const { data: syncCustomers } = await supabase.from('sola_sync_customers').select('id').eq('matched_donor_id', id)
+      const syncCustomerIds = (syncCustomers ?? []).map(c => c.id)
+      if (!syncCustomerIds.length) return
+      const { data: pending } = await supabase.from('sola_sync_payments')
+        .select('id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
+        .in('sola_sync_customer_id', syncCustomerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
+        .order('transaction_date')
+      setPendingSolaPayments((pending ?? []) as PendingSolaPayment[])
+    } catch {
+      // Best-effort — leave the card empty rather than blocking or erroring
+      // the page over a request some networks can't complete.
+    }
   }, [id, supabase])
 
   useEffect(() => {
@@ -174,7 +182,8 @@ export default function DonorDetailPage() {
   useEffect(() => {
     fetchSettings()
     fetchData()
-  }, [fetchSettings, fetchData])
+    fetchPendingSolaPayments()
+  }, [fetchSettings, fetchData, fetchPendingSolaPayments])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   async function updateDonor() {

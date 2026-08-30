@@ -903,19 +903,6 @@ export default function StudentTuitionPage() {
       } else {
         setParentDonations([])
       }
-
-      // Sola money that's already real (approved) but hasn't been reviewed
-      // into a tuition_payments row yet — see IncomingSolaPayments for why
-      // this is surfaced here instead of only on the Sola Sync queue.
-      const { data: syncCustomers } = await supabase.from('sola_sync_customers').select('id').eq('matched_student_id', studentId)
-      const syncCustomerIds = (syncCustomers ?? []).map(c => c.id)
-      const { data: pending } = syncCustomerIds.length
-        ? await supabase.from('sola_sync_payments')
-            .select('id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
-            .in('sola_sync_customer_id', syncCustomerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
-            .order('transaction_date')
-        : { data: [] as PendingSolaPayment[] }
-      setPendingSolaPayments((pending ?? []) as PendingSolaPayment[])
     } catch {
       // Network-level fetch failure (flaky connection, ad blocker) that
       // survived the Supabase client's own retries — surface a retry
@@ -925,8 +912,30 @@ export default function StudentTuitionPage() {
     setLoading(false)
   }, [studentId, supabase])
 
+  // Completely separate from load() on purpose — some networks block
+  // requests to the sola_sync_* tables outright ("TypeError: Failed to
+  // fetch"), the same class of issue already documented elsewhere in this
+  // codebase for tuition_payments. This card is a nice-to-have; it must
+  // never be able to take the whole page down (or into the retry-error
+  // state) if it fails, so it gets its own effect and swallows any error.
+  const loadPendingSolaPayments = useCallback(async () => {
+    try {
+      const { data: syncCustomers } = await supabase.from('sola_sync_customers').select('id').eq('matched_student_id', studentId)
+      const syncCustomerIds = (syncCustomers ?? []).map(c => c.id)
+      if (!syncCustomerIds.length) return
+      const { data: pending } = await supabase.from('sola_sync_payments')
+        .select('id,amount,transaction_date,charge_kind,suggested_fee_type,suggested_donation_category,import_status')
+        .in('sola_sync_customer_id', syncCustomerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
+        .order('transaction_date')
+      setPendingSolaPayments((pending ?? []) as PendingSolaPayment[])
+    } catch {
+      // Best-effort — leave the card empty rather than blocking or erroring
+      // the page over a request some networks can't complete.
+    }
+  }, [studentId, supabase])
+
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load(); loadPendingSolaPayments() }, [load, loadPendingSolaPayments])
 
   // registration_fee_status/amount on the student are just "has a fee been
   // queued, and at what base amount" — actual paid/partial/forgiven amounts

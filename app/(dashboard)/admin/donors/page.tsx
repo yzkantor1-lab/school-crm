@@ -88,21 +88,32 @@ export default function DonorsPage() {
 
   const fetchDonors = useCallback(async () => {
     setLoading(true)
-    const [{ data }, { data: sch }, { data: syncCustomers }] = await Promise.all([
+    const [{ data }, { data: sch }] = await Promise.all([
       supabase.from('donors').select('*').order('name'),
       supabase.from('payment_schedules')
         .select('id,donor_id,purpose,amount,interval_type,interval_count,total_payments,payment_method_id')
         .eq('status', 'active').not('donor_id', 'is', null),
-      supabase.from('sola_sync_customers').select('id,matched_donor_id').not('matched_donor_id', 'is', null),
     ])
     setDonors(data || [])
     setSchedules(sch || [])
+    setLoading(false)
+  }, [supabase])
 
-    // Real (approved) Sola money that's landed for a matched donor but hasn't
-    // been reviewed into a donations row yet — see IncomingSolaPayments.
-    const donorByCustomerId = new Map((syncCustomers ?? []).map(c => [c.id, c.matched_donor_id as string]))
-    const customerIds = (syncCustomers ?? []).map(c => c.id)
-    if (customerIds.length) {
+  // Completely separate from fetchDonors on purpose — some networks block
+  // requests to the sola_sync_* tables outright ("TypeError: Failed to
+  // fetch"), which previously took the whole page down since it shared
+  // fetchDonors' Promise.all. This badge is a nice-to-have; it must never be
+  // able to do that, so it gets its own effect, own state, and swallows any
+  // error instead of surfacing or throwing one.
+  const fetchPendingSola = useCallback(async () => {
+    try {
+      // Real (approved) Sola money that's landed for a matched donor but
+      // hasn't been reviewed into a donations row yet — see IncomingSolaPayments.
+      const { data: syncCustomers } = await supabase
+        .from('sola_sync_customers').select('id,matched_donor_id').not('matched_donor_id', 'is', null)
+      const donorByCustomerId = new Map((syncCustomers ?? []).map(c => [c.id, c.matched_donor_id as string]))
+      const customerIds = (syncCustomers ?? []).map(c => c.id)
+      if (!customerIds.length) return
       const { data: pending } = await supabase
         .from('sola_sync_payments').select('sola_sync_customer_id,amount')
         .in('sola_sync_customer_id', customerIds).in('import_status', ['pending', 'needs_review']).eq('gateway_status', 'Approved')
@@ -115,18 +126,18 @@ export default function DonorsPage() {
         map.set(donorId, cur)
       }
       setPendingSola(map)
-    } else {
-      setPendingSola(new Map())
+    } catch {
+      // Best-effort — leave the badge showing nothing rather than blocking
+      // or erroring the page over a request some networks can't complete.
     }
-
-    setLoading(false)
   }, [supabase])
 
   /* eslint-disable react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await */
   useEffect(() => {
     fetchSettings()
     fetchDonors()
-  }, [fetchSettings, fetchDonors])
+    fetchPendingSola()
+  }, [fetchSettings, fetchDonors, fetchPendingSola])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   async function addDonor(e: React.FormEvent) {
