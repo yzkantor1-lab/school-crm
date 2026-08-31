@@ -843,6 +843,7 @@ export default function StudentTuitionPage() {
   const [schedules, setSchedules] = useState<PaymentSchedule[]>([])
   const [parentDonations, setParentDonations] = useState<ParentDonation[]>([])
   const [pendingSolaPayments, setPendingSolaPayments] = useState<PendingSolaPayment[]>([])
+  const [taxId, setTaxId] = useState('')
   const [recalcTarget, setRecalcTarget] = useState<{
     purpose: 'tuition' | 'building_fund'; purposeLabel: string; schedule: PaymentSchedule; remainingBalance: number
   } | null>(null)
@@ -862,6 +863,7 @@ export default function StudentTuitionPage() {
       const [
         { data: s, error: sErr }, { data: p, error: pErr },
         { data: pm, error: pmErr }, { data: ds, error: dsErr }, { data: sched, error: schedErr },
+        { data: taxIdRow },
       ] = await Promise.all([
         supabase.from('students')
           .select('id,first_name,last_name,grade_level,student_id,status,came_semester,semester_left,address,home_phone,father_name,father_cell,father_email,mother_name,mother_cell,mother_email,parents_title,registration_fee_status,registration_fee_amount,registration_fee_paid_date,tuition_payments(*)')
@@ -871,7 +873,9 @@ export default function StudentTuitionPage() {
         supabase.from('donor_students').select('donor_id').eq('student_id', studentId),
         supabase.from('payment_schedules').select('id,status,amount,start_date,interval_type,interval_count,purpose,total_payments,payment_method_id,created_at')
           .eq('student_id', studentId).order('created_at', { ascending: false }),
+        supabase.from('site_settings').select('value').eq('key', 'tax_id').maybeSingle(),
       ])
+      setTaxId(taxIdRow?.value ?? '')
       const warnings: string[] = []
       if (sErr) warnings.push(`Student record (incl. tuition payments): ${sErr.message}`)
       if (pErr) warnings.push(`Tuition plans: ${pErr.message}`)
@@ -1246,6 +1250,7 @@ export default function StudentTuitionPage() {
       balanceAfter,
       paymentMethodLabel,
       extraNote,
+      taxId,
     }
   }
 

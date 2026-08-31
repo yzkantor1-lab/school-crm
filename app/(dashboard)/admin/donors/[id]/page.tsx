@@ -94,15 +94,20 @@ export default function DonorDetailPage() {
   const [linkedStudents, setLinkedStudents] = useState<LinkedStudent[]>([])
   const [studentQuery, setStudentQuery] = useState('')
   const [studentMatches, setStudentMatches] = useState<LinkedStudent[]>([])
+  const [taxId, setTaxId] = useState('')
 
   const fetchSettings = useCallback(async () => {
-    const { data } = await supabase.from('donor_settings').select('*').limit(1).maybeSingle()
+    const [{ data }, { data: taxIdRow }] = await Promise.all([
+      supabase.from('donor_settings').select('*').limit(1).maybeSingle(),
+      supabase.from('site_settings').select('value').eq('key', 'tax_id').maybeSingle(),
+    ])
     if (data) {
       setDonorCategories(data.donor_categories || ['General'])
       setRelationships(data.relationships || ['Other'])
       setDonationMethods(data.donation_methods || ['Cash'])
       setDonationPurposes(data.donation_purposes || ['General Fund'])
     }
+    setTaxId(taxIdRow?.value ?? '')
   }, [supabase])
 
   const fetchData = useCallback(async () => {
@@ -238,6 +243,7 @@ export default function DonorDetailPage() {
         notes: donation.notes,
       },
       extraNote,
+      taxId,
     }
   }
 

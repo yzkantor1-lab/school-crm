@@ -21,6 +21,9 @@ type DonationReceiptOpts = {
   donor: ReceiptDonor
   donation: ReceiptDonation
   extraNote?: string
+  // Read from site_settings('tax_id') by the caller — this file has no
+  // Supabase access of its own, it just renders whatever's passed in.
+  taxId?: string | null
 }
 
 // Raw base64 (no "data:application/pdf;...;base64," prefix) suitable for email attachments.
@@ -76,15 +79,22 @@ async function buildDonationReceiptDoc(opts: DonationReceiptOpts): Promise<{ doc
     14, y,
   )
 
+  let afterDisclaimerY = y + 16
+  if (opts.taxId) {
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Tax ID: ${opts.taxId}`, 14, afterDisclaimerY)
+    afterDisclaimerY += 8
+  }
+
   doc.setFont('helvetica', 'normal')
-  doc.text('Thank you for your generous support.', 14, y + 16)
+  doc.text('Thank you for your generous support.', 14, afterDisclaimerY)
 
   if (opts.extraNote) {
     doc.setFontSize(9)
     doc.setFont('helvetica', 'italic')
     doc.setTextColor(80)
     const wrapWidth = doc.internal.pageSize.getWidth() - 28
-    doc.text(doc.splitTextToSize(`Note: ${opts.extraNote}`, wrapWidth), 14, y + 28)
+    doc.text(doc.splitTextToSize(`Note: ${opts.extraNote}`, wrapWidth), 14, afterDisclaimerY + 12)
     doc.setTextColor(0)
     doc.setFont('helvetica', 'normal')
   }

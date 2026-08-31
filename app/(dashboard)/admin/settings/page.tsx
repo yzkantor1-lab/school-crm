@@ -128,13 +128,13 @@ function SaveBar({ onSave, saving, saved }: { onSave: () => void; saving: boolea
 function GeneralTab() {
   const { getAll, set } = useSettings()
   const [fields, setFields] = useState({
-    school_name: '', school_email: '', school_phone: '', school_address: '', school_tagline: '', logo_url: '', website: '',
+    school_name: '', school_email: '', school_phone: '', school_address: '', school_tagline: '', logo_url: '', website: '', tax_id: '',
   })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    getAll(['school_name','school_email','school_phone','school_address','school_tagline','logo_url','website']).then(m => {
+    getAll(['school_name','school_email','school_phone','school_address','school_tagline','logo_url','website','tax_id']).then(m => {
       setFields(prev => ({ ...prev, ...m }))
     })
   }, [getAll])
@@ -179,6 +179,7 @@ function GeneralTab() {
         {field('school_phone', 'Phone Number', 'tel')}
         {field('logo_url', 'Logo URL')}
         {field('website', 'Website URL', 'url')}
+        {field('tax_id', 'Tax ID / EIN')}
       </div>
       {field('school_address', 'Address', 'text', 2)}
       <SaveBar onSave={save} saving={saving} saved={saved} />

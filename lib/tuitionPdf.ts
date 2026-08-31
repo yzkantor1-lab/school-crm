@@ -49,6 +49,10 @@ type ReceiptOpts = {
   balanceAfter: number
   paymentMethodLabel: (v: string | null) => string
   extraNote?: string
+  // Read from site_settings('tax_id') by the caller — only rendered for a
+  // donation-type payment; tuition/registration/phone charges aren't
+  // charitable contributions, so a Tax ID line there would be misleading.
+  taxId?: string | null
 }
 
 function studentName(s: BillStudent) {
@@ -321,12 +325,26 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
     y = (doc as any).lastAutoTable.finalY + 8
   }
 
+  let thankYouY = y + 4
+  if (isDonation) {
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'italic')
+    doc.setTextColor(120)
+    doc.text('No goods or services were provided in exchange for this contribution.\nPlease retain this receipt for your tax records.', 14, y + 4)
+    doc.setFont('helvetica', 'normal')
+    thankYouY = y + 16
+    if (opts.taxId) {
+      doc.text(`Tax ID: ${opts.taxId}`, 14, thankYouY)
+      thankYouY += 8
+    }
+  }
+
   doc.setFontSize(9)
   doc.setTextColor(120)
-  doc.text(isDonation ? 'Thank you for your generous donation.' : 'Thank you for your payment.', 14, y + 4)
+  doc.text(isDonation ? 'Thank you for your generous donation.' : 'Thank you for your payment.', 14, thankYouY)
   doc.setTextColor(0)
 
-  if (opts.extraNote) drawExtraNote(doc, opts.extraNote, y + 14)
+  if (opts.extraNote) drawExtraNote(doc, opts.extraNote, thankYouY + 10)
 
   drawLetterheadFooter(doc)
 
