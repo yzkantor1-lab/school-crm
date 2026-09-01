@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
 import { TrendingUp, TrendingDown, DollarSign } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
@@ -35,39 +34,6 @@ const INCOME_TYPES: TxType[] = ['tuition', 'registration_fee', 'building_fund', 
 
 const PERIOD_LABEL: Record<Period, string> = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' }
 
-const CATEGORY_LABEL: Record<string, string> = {
-  monthly_recurring: 'Monthly Recurring',
-  one_time: 'One-Time',
-  event: 'Event',
-}
-
-// Supabase's default max_rows (1000) silently truncates an unpaginated
-// .select() — page through in 1000-row chunks so a busy "All Time" range
-// (thousands of tuition payments across years) can't quietly drop rows.
-// See lib/sola/* for the prior incident this pattern was built to avoid.
-//
-// The query callback's `data` is intentionally untyped here: without
-// generated Supabase DB types, the client infers embedded many-to-one
-// relations (e.g. donations.donors) as arrays even though they resolve to
-// single objects at runtime — asserting the real shape via T avoids fighting
-// that inference mismatch (the Reports page hits the same quirk).
-async function selectAll<T>(
-  query: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>
-): Promise<T[]> {
-  const rows: T[] = []
-  const pageSize = 1000
-  let from = 0
-  while (true) {
-    const { data, error } = await query(from, from + pageSize - 1)
-    if (error) throw new Error(error.message)
-    const page = (data ?? []) as T[]
-    rows.push(...page)
-    if (page.length < pageSize) break
-    from += pageSize
-  }
-  return rows
-}
-
 function periodKey(dateStr: string, period: Period): string {
   if (period === 'yearly') return dateStr.slice(0, 4)
   if (period === 'monthly') return dateStr.slice(0, 7)
@@ -91,7 +57,6 @@ function periodLabel(key: string, period: Period): string {
 }
 
 export default function CashFlowPage() {
-  const supabase = createClient()
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -102,134 +67,27 @@ export default function CashFlowPage() {
   const [period, setPeriod] = useState<Period>('monthly')
   const [includeArchived, setIncludeArchived] = useState(false)
 
+  // Routed through our own /api/cash-flow/ledger endpoint (server-side),
+  // not fetched from Supabase directly in the browser — a school network
+  // content filter (GenTech) does SSL inspection on *.supabase.co and
+  // blocks/breaks the CORS response for any request whose URL text
+  // contains "payment". This page's queries can't dodge that by renaming
+  // or re-embedding (payment_date/payment_type/pledge_payments/
+  // tuition_payments are real column and table names), so the request has
+  // to happen on our own server instead, where the school's network never
+  // sees it. See app/api/cash-flow/ledger/route.ts.
   const fetchAll = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const donationRows = await selectAll<{
-        id: string; amount: number; donation_date: string; purpose: string
-        category: string | null; archived: boolean
-        donors: { id: string; name: string } | null
-      }>((from, to) => {
-        let q = supabase.from('donations')
-          .select('id, amount, donation_date, purpose, category, archived, donors(id, name)')
-          .order('id', { ascending: true })
-          .range(from, to)
-        if (startDate) q = q.gte('donation_date', startDate)
-        if (endDate) q = q.lte('donation_date', endDate)
-        if (!includeArchived) q = q.eq('archived', false)
-        return q
-      })
-
-      // Fetched as a nested embed on pledges, not a standalone
-      // pledge_payments request — same network-filter block that hit
-      // tuition_payments (see "Fetch tuition_payments as a nested embed,
-      // not a direct request"): a direct request to .../pledge_payments
-      // trips content filters that block any URL containing "payment".
-      const pledgeRows = await selectAll<{
-        id: string; purpose: string | null; donors: { name: string } | null
-        pledge_payments: { id: string; amount: number; payment_date: string | null }[] | null
-      }>((from, to) =>
-        supabase.from('pledges')
-          .select('id, purpose, donors(name), pledge_payments(id, amount, payment_date)')
-          .order('id', { ascending: true })
-          .range(from, to)
-      )
-      const pledgePaymentRows = pledgeRows.flatMap(p =>
-        (p.pledge_payments || [])
-          .filter(pp => pp.payment_date != null)
-          .filter(pp => (!startDate || pp.payment_date! >= startDate) && (!endDate || pp.payment_date! <= endDate))
-          .map(pp => ({ id: pp.id, amount: pp.amount, payment_date: pp.payment_date as string, pledges: { purpose: p.purpose, donors: p.donors } }))
-      )
-
-      // Fetched as a nested embed on students, not a standalone
-      // tuition_payments request — some school network filters block any
-      // direct request to that resource outright (confirmed live on the
-      // student tuition page), so payments only reliably arrive piggybacked
-      // on a request whose primary resource is something else. Embedding
-      // under students (not tuition_plans) matters here specifically:
-      // registration-fee payments have no tuition_plan_id at all, so they'd
-      // silently vanish from this report if plans were the parent instead.
-      const studentPaymentRows = await selectAll<{
-        id: string; first_name: string; last_name: string
-        tuition_payments: { id: string; amount: number; payment_date: string | null; payment_type: string; status: string }[] | null
-      }>((from, to) =>
-        supabase.from('students')
-          .select('id, first_name, last_name, tuition_payments(id, amount, payment_date, payment_type, status)')
-          .order('id', { ascending: true })
-          .range(from, to)
-      )
-      const tuitionRows = studentPaymentRows.flatMap(s => {
-        const student = { id: s.id, first_name: s.first_name, last_name: s.last_name }
-        return (s.tuition_payments || [])
-          .filter(t => ['paid', 'partial'].includes(t.status) && t.payment_date != null)
-          .filter(t => (!startDate || t.payment_date! >= startDate) && (!endDate || t.payment_date! <= endDate))
-          .map(t => ({ id: t.id, amount: t.amount, payment_date: t.payment_date as string, payment_type: t.payment_type, students: student }))
-      })
-
-      const expenseRows = await selectAll<{
-        id: string; amount: number; date: string; category: string
-        description: string; vendor: string | null; archived: boolean
-      }>((from, to) => {
-        let q = supabase.from('expenses')
-          .select('id, amount, date, category, description, vendor, archived')
-          .order('id', { ascending: true })
-          .range(from, to)
-        if (startDate) q = q.gte('date', startDate)
-        if (endDate) q = q.lte('date', endDate)
-        if (!includeArchived) q = q.eq('archived', false)
-        return q
-      })
-
-      const tx: Transaction[] = [
-        ...donationRows.map(d => ({
-          id: `donation-${d.id}`,
-          date: d.donation_date,
-          type: 'donation' as const,
-          direction: 'in' as const,
-          amount: Number(d.amount),
-          label: d.donors?.name ?? 'Unknown Donor',
-          subLabel: [d.purpose, d.category ? CATEGORY_LABEL[d.category] ?? d.category : null].filter(Boolean).join(' · '),
-          href: d.donors?.id ? `/admin/donors/${d.donors.id}` : undefined,
-        })),
-        ...pledgePaymentRows.map(p => ({
-          id: `pledge-${p.id}`,
-          date: p.payment_date,
-          type: 'pledge_payment' as const,
-          direction: 'in' as const,
-          amount: Number(p.amount),
-          label: p.pledges?.donors?.name ?? 'Unknown Donor',
-          subLabel: ['Pledge Payment', p.pledges?.purpose].filter(Boolean).join(' · '),
-          href: '/admin/pledges',
-        })),
-        ...tuitionRows.map(t => {
-          const type: TxType = t.payment_type === 'registration_fee' ? 'registration_fee'
-            : t.payment_type === 'building_fund' ? 'building_fund'
-            : t.payment_type === 'phone_charge' ? 'phone_charge'
-            : t.payment_type === 'donation' ? 'donation'
-            : 'tuition'
-          return {
-            id: `tuition-${t.id}`,
-            date: t.payment_date,
-            type,
-            direction: 'in' as const,
-            amount: Number(t.amount),
-            label: t.students ? `${t.students.first_name} ${t.students.last_name}` : 'Unknown Student',
-            subLabel: type === 'donation' ? 'Donation (family record)' : TYPE_META[type].label,
-            href: t.students?.id ? `/admin/tuition/${t.students.id}` : undefined,
-          }
-        }),
-        ...expenseRows.map(e => ({
-          id: `expense-${e.id}`,
-          date: e.date,
-          type: 'expense' as const,
-          direction: 'out' as const,
-          amount: Number(e.amount),
-          label: e.category,
-          subLabel: [e.description, e.vendor].filter(Boolean).join(' · '),
-          href: '/admin/expenses',
-        })),
-      ]
+      const params = new URLSearchParams()
+      if (startDate) params.set('start', startDate)
+      if (endDate) params.set('end', endDate)
+      if (includeArchived) params.set('archived', '1')
+      const res = await fetch(`/api/cash-flow/ledger?${params.toString()}`)
+      const json = await res.json()
+      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`)
+      const tx = json as Transaction[]
       tx.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
       setTransactions(tx)
     } catch (err) {
@@ -237,7 +95,7 @@ export default function CashFlowPage() {
     } finally {
       setLoading(false)
     }
-  }, [supabase, startDate, endDate, includeArchived])
+  }, [startDate, endDate, includeArchived])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount/filter-change
   useEffect(() => { fetchAll() }, [fetchAll])
