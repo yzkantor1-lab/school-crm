@@ -121,18 +121,26 @@ export default function CashFlowPage() {
         return q
       })
 
-      const pledgePaymentRows = await selectAll<{
-        id: string; amount: number; payment_date: string
-        pledges: { purpose: string | null; donors: { name: string } | null } | null
-      }>((from, to) => {
-        let q = supabase.from('pledge_payments')
-          .select('id, amount, payment_date, pledges(purpose, donors(name))')
+      // Fetched as a nested embed on pledges, not a standalone
+      // pledge_payments request — same network-filter block that hit
+      // tuition_payments (see "Fetch tuition_payments as a nested embed,
+      // not a direct request"): a direct request to .../pledge_payments
+      // trips content filters that block any URL containing "payment".
+      const pledgeRows = await selectAll<{
+        id: string; purpose: string | null; donors: { name: string } | null
+        pledge_payments: { id: string; amount: number; payment_date: string | null }[] | null
+      }>((from, to) =>
+        supabase.from('pledges')
+          .select('id, purpose, donors(name), pledge_payments(id, amount, payment_date)')
           .order('id', { ascending: true })
           .range(from, to)
-        if (startDate) q = q.gte('payment_date', startDate)
-        if (endDate) q = q.lte('payment_date', endDate)
-        return q
-      })
+      )
+      const pledgePaymentRows = pledgeRows.flatMap(p =>
+        (p.pledge_payments || [])
+          .filter(pp => pp.payment_date != null)
+          .filter(pp => (!startDate || pp.payment_date! >= startDate) && (!endDate || pp.payment_date! <= endDate))
+          .map(pp => ({ id: pp.id, amount: pp.amount, payment_date: pp.payment_date as string, pledges: { purpose: p.purpose, donors: p.donors } }))
+      )
 
       // Fetched as a nested embed on students, not a standalone
       // tuition_payments request — some school network filters block any
