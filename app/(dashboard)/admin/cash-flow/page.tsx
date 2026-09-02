@@ -7,6 +7,7 @@ import { TrendingUp, TrendingDown, DollarSign } from 'lucide-react'
 import ExportButton from '@/components/ExportButton'
 
 type TxType = 'tuition' | 'registration_fee' | 'building_fund' | 'phone_charge' | 'donation' | 'pledge_payment' | 'expense'
+type ScheduleType = 'tuition' | 'building_fund' | 'phone_charge' | 'donation'
 type Period = 'daily' | 'weekly' | 'monthly' | 'yearly'
 type QuickRange = 'today' | 'week' | 'month' | 'year' | 'all' | ''
 
@@ -20,6 +21,21 @@ type Transaction = {
   subLabel: string
   href?: string
 }
+
+type ProjectionMonth = {
+  key: string
+  label: string
+  byType: Partial<Record<ScheduleType, number>>
+  total: number
+}
+
+type Projection = {
+  months: ProjectionMonth[]
+  totalsByType: Partial<Record<ScheduleType, number>>
+  total: number
+}
+
+const SCHEDULE_TYPES: ScheduleType[] = ['tuition', 'donation', 'building_fund', 'phone_charge']
 
 const TYPE_META: Record<TxType, { label: string; badge: string; text: string }> = {
   tuition:           { label: 'Tuition',          badge: 'bg-blue-100 text-blue-700',       text: 'text-blue-600' },
@@ -58,6 +74,7 @@ function periodLabel(key: string, period: Period): string {
 
 export default function CashFlowPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [projection, setProjection] = useState<Projection | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -87,9 +104,10 @@ export default function CashFlowPage() {
       const res = await fetch(`/api/cash-flow/ledger?${params.toString()}`)
       const json = await res.json()
       if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`)
-      const tx = json as Transaction[]
+      const tx = json.transactions as Transaction[]
       tx.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
       setTransactions(tx)
+      setProjection(json.projection as Projection)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load cash flow data')
     } finally {
@@ -224,6 +242,54 @@ export default function CashFlowPage() {
           <div className="text-xs text-slate-400 mt-0.5">{net >= 0 ? 'surplus' : 'deficit'}</div>
         </div>
       </div>
+
+      {/* Monthly projection — what's coming in from active recurring Sola
+          schedules over the next 12 months, independent of the date range
+          filter above (this is forward-looking, not historical). */}
+      {projection && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="px-5 py-3 border-b border-slate-100">
+            <p className="font-semibold text-slate-900">Monthly Projection</p>
+            <p className="text-xs text-slate-400 mt-0.5">Based on active recurring charges, next 12 months</p>
+          </div>
+          <div className="p-4 grid grid-cols-2 sm:grid-cols-5 gap-3">
+            {SCHEDULE_TYPES.map(t => (
+              <div key={t} className="rounded-lg border border-slate-100 p-3">
+                <div className={`text-xs font-medium ${TYPE_META[t].text}`}>{TYPE_META[t].label}</div>
+                <div className="text-base font-bold text-slate-900">{formatCurrency(projection.totalsByType[t] ?? 0)}</div>
+              </div>
+            ))}
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="text-xs font-medium text-slate-500">Total</div>
+              <div className="text-base font-bold text-slate-900">{formatCurrency(projection.total)}</div>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-100">
+                <tr>
+                  <th className="text-left px-5 py-3 text-slate-500 font-medium">Month</th>
+                  {SCHEDULE_TYPES.map(t => (
+                    <th key={t} className="text-right px-5 py-3 text-slate-500 font-medium">{TYPE_META[t].label}</th>
+                  ))}
+                  <th className="text-right px-5 py-3 text-slate-500 font-medium">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projection.months.map(m => (
+                  <tr key={m.key} className="border-b border-slate-50 hover:bg-slate-50 transition">
+                    <td className="px-5 py-3 text-slate-900 font-medium">{m.label}</td>
+                    {SCHEDULE_TYPES.map(t => (
+                      <td key={t} className="px-5 py-3 text-right text-slate-600">{formatCurrency(m.byType[t] ?? 0)}</td>
+                    ))}
+                    <td className="px-5 py-3 text-right font-semibold text-slate-900">{formatCurrency(m.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Category breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

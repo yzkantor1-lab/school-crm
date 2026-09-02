@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 
 type TxType = 'tuition' | 'registration_fee' | 'building_fund' | 'phone_charge' | 'donation' | 'pledge_payment' | 'expense'
+type ScheduleType = 'tuition' | 'building_fund' | 'phone_charge' | 'donation'
 
 type Transaction = {
   id: string
@@ -12,6 +13,13 @@ type Transaction = {
   label: string
   subLabel: string
   href?: string
+}
+
+type ProjectionMonth = {
+  key: string
+  label: string
+  byType: Partial<Record<ScheduleType, number>>
+  total: number
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -57,6 +65,75 @@ async function selectAll<T>(
     from += pageSize
   }
   return rows
+}
+
+function addInterval(d: Date, intervalType: string, intervalCount: number): Date {
+  const nd = new Date(d)
+  if (intervalType === 'day') nd.setDate(nd.getDate() + intervalCount)
+  else if (intervalType === 'week') nd.setDate(nd.getDate() + intervalCount * 7)
+  else if (intervalType === 'year') nd.setFullYear(nd.getFullYear() + intervalCount)
+  else nd.setMonth(nd.getMonth() + intervalCount) // 'month' (and unrecognized values default here)
+  return nd
+}
+
+function monthLabel(key: string): string {
+  const [y, m] = key.split('-').map(Number)
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+}
+
+// Projects active Sola recurring schedules (payment_schedules) forward across
+// the next 12 calendar months, independent of the ledger's own date-range
+// filter — this is about what's coming, not what already happened. Walks
+// each schedule's full theoretical occurrence sequence from its start_date
+// (respecting total_payments as a hard cap on the whole plan, fixed-length
+// payment plans included) and keeps only the occurrences landing in the
+// window, rather than trying to infer "payments remaining" — Sola is the
+// only source of truth for what's actually run so far, and calling it live
+// for every schedule just to draw this chart isn't worth the latency.
+function projectSchedules(schedules: {
+  purpose: string; amount: number; interval_type: string; interval_count: number
+  total_payments: number | null; start_date: string
+}[], monthsAhead: number): { months: ProjectionMonth[]; totalsByType: Partial<Record<ScheduleType, number>>; total: number } {
+  const horizonStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  const horizonEnd = new Date(horizonStart.getFullYear(), horizonStart.getMonth() + monthsAhead, 0)
+
+  const months: ProjectionMonth[] = []
+  for (let i = 0; i < monthsAhead; i++) {
+    const d = new Date(horizonStart.getFullYear(), horizonStart.getMonth() + i, 1)
+    const key = d.toISOString().slice(0, 7)
+    months.push({ key, label: monthLabel(key), byType: {}, total: 0 })
+  }
+  const monthIndex = new Map(months.map(m => [m.key, m]))
+
+  const totalsByType: Partial<Record<ScheduleType, number>> = {}
+  let total = 0
+
+  for (const s of schedules) {
+    const type = s.purpose as ScheduleType
+    if (!['tuition', 'building_fund', 'phone_charge', 'donation'].includes(type)) continue
+
+    let cur = new Date(`${s.start_date}T00:00:00`)
+    let count = 0
+    const cap = s.total_payments ?? Infinity
+    let iterations = 0
+    while (count < cap && cur <= horizonEnd && iterations < 2000) {
+      if (cur >= horizonStart) {
+        const key = cur.toISOString().slice(0, 7)
+        const bucket = monthIndex.get(key)
+        if (bucket) {
+          bucket.byType[type] = (bucket.byType[type] ?? 0) + s.amount
+          bucket.total += s.amount
+          totalsByType[type] = (totalsByType[type] ?? 0) + s.amount
+          total += s.amount
+        }
+      }
+      cur = addInterval(cur, s.interval_type, s.interval_count)
+      count++
+      iterations++
+    }
+  }
+
+  return { months, totalsByType, total }
 }
 
 export async function GET(req: NextRequest) {
@@ -115,6 +192,21 @@ export async function GET(req: NextRequest) {
         .filter(t => (!startDate || t.payment_date! >= startDate) && (!endDate || t.payment_date! <= endDate))
         .map(t => ({ id: t.id, amount: t.amount, payment_date: t.payment_date as string, payment_type: t.payment_type, students: student }))
     })
+
+    // payment_schedules — same URL-text problem as pledge_payments/
+    // tuition_payments (the table name itself is "payment_schedules"), so
+    // this has to be server-side too.
+    const activeSchedules = await selectAll<{
+      purpose: string; amount: number; interval_type: string; interval_count: number
+      total_payments: number | null; start_date: string
+    }>((from, to) =>
+      supabase.from('payment_schedules')
+        .select('purpose, amount, interval_type, interval_count, total_payments, start_date')
+        .eq('status', 'active')
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+    const projection = projectSchedules(activeSchedules, 12)
 
     const expenseRows = await selectAll<{
       id: string; amount: number; date: string; category: string
@@ -180,7 +272,7 @@ export async function GET(req: NextRequest) {
       })),
     ]
 
-    return NextResponse.json(tx)
+    return NextResponse.json({ transactions: tx, projection })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load cash flow data'
     return NextResponse.json({ error: message }, { status: 500 })
