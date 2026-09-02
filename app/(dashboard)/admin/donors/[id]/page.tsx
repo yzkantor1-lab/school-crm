@@ -43,7 +43,7 @@ type Schedule = {
   total_payments: number | null; payment_method_id: string | null
   start_date: string
 }
-type Pledge = { id: string; amount: number; amount_paid: number; fulfilled: boolean }
+type Pledge = { id: string; amount: number; amount_paid: number; fulfilled: boolean; due_date: string | null }
 
 function scheduleCadence(s: Schedule) {
   const amt = formatCurrency(s.amount)
@@ -94,7 +94,7 @@ export default function DonorDetailPage() {
   const [showChargeModal, setShowChargeModal] = useState(false)
   const [showRecurringModal, setShowRecurringModal] = useState(false)
   const [showManageRecurring, setShowManageRecurring] = useState(false)
-  const [recalcTarget, setRecalcTarget] = useState<{ schedule: Schedule; remainingBalance: number } | null>(null)
+  const [recalcTarget, setRecalcTarget] = useState<{ schedule: Schedule; remainingBalance: number; yearEndDate: string | null } | null>(null)
   const [events, setEvents] = useState<EventOption[]>([])
   const [linkedStudents, setLinkedStudents] = useState<LinkedStudent[]>([])
   const [studentQuery, setStudentQuery] = useState('')
@@ -124,7 +124,7 @@ export default function DonorDetailPage() {
       supabase.from('events').select('id,name').order('event_date', { ascending: false }),
       supabase.from('donor_students').select('students(id,first_name,last_name)').eq('donor_id', id),
       supabase.from('payment_schedules').select('id,purpose,amount,interval_type,interval_count,total_payments,payment_method_id,start_date').eq('donor_id', id).eq('status', 'active'),
-      supabase.from('pledges').select('id,amount,amount_paid,fulfilled').eq('donor_id', id),
+      supabase.from('pledges').select('id,amount,amount_paid,fulfilled,due_date').eq('donor_id', id),
     ])
     setEvents(ev ?? [])
     setLinkedStudents(((ds ?? []) as unknown as { students: LinkedStudent }[]).map(r => r.students).filter(Boolean))
@@ -304,11 +304,12 @@ export default function DonorDetailPage() {
   // this is a starting suggestion, never enforced).
   const openPledges = pledges.filter(p => !p.fulfilled && p.amount - p.amount_paid > 0.005)
   const pledgeRemainingBalance = openPledges.length === 1 ? openPledges[0].amount - openPledges[0].amount_paid : 0
+  const pledgeYearEndDate = openPledges.length === 1 ? openPledges[0].due_date : null
 
   function openRecalculate(picked: { id: string }) {
     const schedule = schedules.find(s => s.id === picked.id)
     if (!schedule) return
-    setRecalcTarget({ schedule, remainingBalance: pledgeRemainingBalance })
+    setRecalcTarget({ schedule, remainingBalance: pledgeRemainingBalance, yearEndDate: pledgeYearEndDate })
   }
 
   if (loading) return <div className="text-center py-12 text-slate-500">Loading...</div>
@@ -606,6 +607,7 @@ export default function DonorDetailPage() {
           purposeLabel="Donation"
           schedule={recalcTarget.schedule}
           remainingBalance={recalcTarget.remainingBalance}
+          yearEndDate={recalcTarget.yearEndDate}
         />
       )}
     </div>

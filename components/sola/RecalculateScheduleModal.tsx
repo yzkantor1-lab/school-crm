@@ -23,11 +23,42 @@ type Props = {
   purposeLabel: string
   schedule: ScheduleInfo
   remainingBalance: number
+  // The date this balance needs to be paid off by (a tuition plan's
+  // end_date, a pledge's due_date) — when known, picking a resume date
+  // auto-fills how many payments fit between it and this date, and
+  // re-divides the balance across them. Omit/null when there's nothing on
+  // file to compute against; the date field then behaves as it always has.
+  yearEndDate?: string | null
 }
 
 function cadenceLabel(intervalType: string, intervalCount: number) {
   if (intervalCount === 1) return `every ${intervalType}`
   return `every ${intervalCount} ${intervalType}s`
+}
+
+function addInterval(d: Date, intervalType: string, intervalCount: number): Date {
+  const nd = new Date(d)
+  if (intervalType === 'day') nd.setDate(nd.getDate() + intervalCount)
+  else if (intervalType === 'week') nd.setDate(nd.getDate() + intervalCount * 7)
+  else if (intervalType === 'year') nd.setFullYear(nd.getFullYear() + intervalCount)
+  else nd.setMonth(nd.getMonth() + intervalCount) // 'month' (and unrecognized values default here)
+  return nd
+}
+
+// How many of this schedule's own billing cycles land on or before `end`,
+// starting from `start` — i.e. "if it resumes on this date, how many
+// payments fit before the year's out."
+function occurrencesThrough(start: Date, end: Date, intervalType: string, intervalCount: number): number {
+  if (end < start) return 0
+  let count = 0
+  let cur = new Date(start)
+  let iterations = 0
+  while (cur <= end && iterations < 1000) {
+    count++
+    cur = addInterval(cur, intervalType, intervalCount)
+    iterations++
+  }
+  return count
 }
 
 // Replaces an active schedule with a new one sized to divide a target amount
@@ -41,7 +72,7 @@ function cadenceLabel(intervalType: string, intervalCount: number) {
 // existing schedule and creates a new one on the same card/cadence — staff
 // confirms the numbers first rather than this happening automatically,
 // since it's a real change to live billing.
-export default function RecalculateScheduleModal({ onClose, onDone, ownerType, ownerId, purpose, purposeLabel, schedule, remainingBalance }: Props) {
+export default function RecalculateScheduleModal({ onClose, onDone, ownerType, ownerId, purpose, purposeLabel, schedule, remainingBalance, yearEndDate }: Props) {
   const [loadingStatus, setLoadingStatus] = useState(true)
   const [statusError, setStatusError] = useState('')
   const [balance, setBalance] = useState(remainingBalance.toFixed(2))
@@ -107,6 +138,21 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
   function useOriginalPaymentCount() {
     setRemainingPayments(String(originalRemainingPayments))
     recompute(balance, String(originalRemainingPayments))
+  }
+
+  // Moving the resume date re-derives how many payments actually fit before
+  // yearEndDate and re-divides the balance across them — the "if I start
+  // later, divide what's left accordingly" behavior. Only when a year-end
+  // date is on file; otherwise the date field doesn't touch the other
+  // fields, same as before.
+  function onStartDateChange(v: string) {
+    setStartDate(v)
+    if (!yearEndDate) return
+    const start = new Date(`${v}T00:00:00`)
+    const end = new Date(`${yearEndDate}T00:00:00`)
+    const n = Math.max(1, occurrencesThrough(start, end, schedule.interval_type, schedule.interval_count))
+    setRemainingPayments(String(n))
+    recompute(balance, String(n))
   }
 
   async function confirm() {
@@ -220,8 +266,13 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">Resume / next payment date</label>
-              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+              <input type="date" value={startDate} onChange={e => onStartDateChange(e.target.value)}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              {yearEndDate && (
+                <p className="text-xs text-slate-400 mt-1">
+                  Picking a date recalculates Remaining payments/Amount above to fit by {new Date(`${yearEndDate}T00:00:00`).toLocaleDateString()}.
+                </p>
+              )}
             </div>
 
             {!schedule.payment_method_id && (

@@ -862,7 +862,8 @@ export default function StudentTuitionPage() {
   const [pendingSolaPayments, setPendingSolaPayments] = useState<PendingSolaPayment[]>([])
   const [taxId, setTaxId] = useState('')
   const [recalcTarget, setRecalcTarget] = useState<{
-    purpose: 'tuition' | 'building_fund' | 'phone_charge'; purposeLabel: string; schedule: PaymentSchedule; remainingBalance: number
+    purpose: 'tuition' | 'building_fund' | 'phone_charge'; purposeLabel: string; schedule: PaymentSchedule
+    remainingBalance: number; yearEndDate: string | null
   } | null>(null)
 
   const load = useCallback(async () => {
@@ -1475,12 +1476,16 @@ export default function StudentTuitionPage() {
   function openRecalculate(picked: { id: string }) {
     const schedule = schedules.find(s => s.id === picked.id)
     if (!schedule) return
+    // currentPlan.end_date is the only "when does this need to be paid off
+    // by" date actually on file per student — used for all three purposes
+    // here since they all bill against the same current plan/year.
+    const yearEndDate = currentPlan?.end_date ?? null
     if (schedule.purpose === 'tuition') {
-      setRecalcTarget({ purpose: 'tuition', purposeLabel: 'Tuition', schedule, remainingBalance: bfBal?.tuitionBalance ?? 0 })
+      setRecalcTarget({ purpose: 'tuition', purposeLabel: 'Tuition', schedule, remainingBalance: bfBal?.tuitionBalance ?? 0, yearEndDate })
     } else if (schedule.purpose === 'building_fund') {
-      setRecalcTarget({ purpose: 'building_fund', purposeLabel: 'Building Fund', schedule, remainingBalance: bfBal?.buildingFundBalance ?? 0 })
+      setRecalcTarget({ purpose: 'building_fund', purposeLabel: 'Building Fund', schedule, remainingBalance: bfBal?.buildingFundBalance ?? 0, yearEndDate })
     } else if (schedule.purpose === 'phone_charge') {
-      setRecalcTarget({ purpose: 'phone_charge', purposeLabel: 'Phone Charge', schedule, remainingBalance: phoneChargeRemainingBalance })
+      setRecalcTarget({ purpose: 'phone_charge', purposeLabel: 'Phone Charge', schedule, remainingBalance: phoneChargeRemainingBalance, yearEndDate })
     }
   }
 
@@ -1619,6 +1624,7 @@ export default function StudentTuitionPage() {
           purposeLabel={recalcTarget.purposeLabel}
           schedule={recalcTarget.schedule}
           remainingBalance={recalcTarget.remainingBalance}
+          yearEndDate={recalcTarget.yearEndDate}
         />
       )}
 
@@ -2609,7 +2615,7 @@ export default function StudentTuitionPage() {
                           may no longer match the {formatCurrency(bal.tuitionBalance)} still owed.
                         </span>
                         <button
-                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'tuition', purposeLabel: 'Tuition', schedule: tuitionSchedule, remainingBalance: bal.tuitionBalance }) }}
+                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'tuition', purposeLabel: 'Tuition', schedule: tuitionSchedule, remainingBalance: bal.tuitionBalance, yearEndDate: plan.end_date ?? null }) }}
                           className="shrink-0 font-semibold text-amber-900 hover:text-amber-950 underline"
                         >
                           Recalculate
@@ -2625,7 +2631,7 @@ export default function StudentTuitionPage() {
                           may no longer match the {formatCurrency(bal.buildingFundBalance)} still owed.
                         </span>
                         <button
-                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'building_fund', purposeLabel: 'Building Fund', schedule: buildingFundSchedule, remainingBalance: bal.buildingFundBalance }) }}
+                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'building_fund', purposeLabel: 'Building Fund', schedule: buildingFundSchedule, remainingBalance: bal.buildingFundBalance, yearEndDate: plan.end_date ?? null }) }}
                           className="shrink-0 font-semibold text-amber-900 hover:text-amber-950 underline"
                         >
                           Recalculate
