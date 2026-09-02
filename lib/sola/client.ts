@@ -164,7 +164,7 @@ type SolaRawSchedule = {
   FailedTransactionRetryTimes?: number
   DaysBetweenRetries?: number
   Custom02?: string
-  LastProjectedPaymentDate?: string
+  NextScheduledRunTime?: string
 }
 
 // Exported so callers that need to read a live schedule's own fields (e.g.
@@ -240,7 +240,7 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
   if (!current) return { ok: false, error: 'Schedule not found in Sola' }
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
-  const nextRun = current.LastProjectedPaymentDate ? new Date(current.LastProjectedPaymentDate) : null
+  const nextRun = current.NextScheduledRunTime ? new Date(current.NextScheduledRunTime) : null
   const endDate = nextRun && nextRun > tomorrow ? nextRun : tomorrow
   return replaceSchedule(scheduleId, { EndDate: endDate.toISOString().slice(0, 10) })
 }
@@ -326,7 +326,7 @@ export async function listAllSchedules(): Promise<SolaSchedule[]> {
     Schedules?: Array<{
       ScheduleId: string; CustomerId: string; Description?: string; Amount?: number
       IntervalType?: string; IntervalCount?: number; TotalPayments?: number
-      PaymentsProcessed?: number; LastProjectedPaymentDate?: string
+      PaymentsProcessed?: number; NextScheduledRunTime?: string
     }>
   }
   const all: SolaSchedule[] = []
@@ -338,7 +338,7 @@ export async function listAllSchedules(): Promise<SolaSchedule[]> {
       all.push({
         scheduleId: s.ScheduleId, customerId: s.CustomerId, description: s.Description, amount: s.Amount,
         intervalType: s.IntervalType, intervalCount: s.IntervalCount, totalPayments: s.TotalPayments,
-        paymentsProcessed: s.PaymentsProcessed, nextScheduledRunTime: s.LastProjectedPaymentDate,
+        paymentsProcessed: s.PaymentsProcessed, nextScheduledRunTime: s.NextScheduledRunTime,
       })
     }
     nextToken = json.NextToken ?? ''
