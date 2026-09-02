@@ -47,6 +47,11 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
   const [balance, setBalance] = useState(remainingBalance.toFixed(2))
   const [remainingPayments, setRemainingPayments] = useState('')
   const [amount, setAmount] = useState('')
+  // The original arrangement's own numbers — kept around (not shown as
+  // editable fields, just used by the two strategy buttons below) so
+  // "resume as originally set up" is always one click away no matter what
+  // staff has since typed into the balance/payments/amount fields.
+  const [originalRemainingPayments, setOriginalRemainingPayments] = useState(1)
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
@@ -63,6 +68,7 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
         const processed = json.paymentsProcessed ?? 0
         const remaining = Math.max(1, total - processed)
         setRemainingPayments(String(remaining))
+        setOriginalRemainingPayments(remaining)
         setAmount((remainingBalance / remaining).toFixed(2))
         if (json.nextScheduledRunTime) setStartDate(String(json.nextScheduledRunTime).slice(0, 10))
       } catch (err) {
@@ -84,6 +90,23 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
   }
   function recomputeAmount(nextRemainingPayments: string) {
     recompute(balance, nextRemainingPayments)
+  }
+
+  // Two ways to reconcile the balance against "how it was originally set
+  // up," rather than making staff work out the math themselves every time:
+  // keep charging the same amount and let the payoff take however many
+  // payments that needs, or keep the originally-planned number of payments
+  // and let the amount adjust to still pay off the balance by then.
+  function useOriginalAmount() {
+    const b = parseFloat(balance)
+    if (!(b >= 0)) return
+    const n = Math.max(1, Math.ceil(b / schedule.amount))
+    setAmount(schedule.amount.toFixed(2))
+    setRemainingPayments(String(n))
+  }
+  function useOriginalPaymentCount() {
+    setRemainingPayments(String(originalRemainingPayments))
+    recompute(balance, String(originalRemainingPayments))
   }
 
   async function confirm() {
@@ -166,6 +189,21 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
               <label className="block text-xs font-medium text-slate-500 mb-1">Remaining balance</label>
               <input type="number" step="0.01" min="0" value={balance} onChange={e => onBalanceChange(e.target.value)}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Divide it how?</label>
+              <div className="flex gap-2">
+                <button type="button" onClick={useOriginalAmount}
+                  className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-blue-50 transition-colors">
+                  Keep original amount ({formatCurrency(schedule.amount)})
+                </button>
+                {schedule.total_payments != null && (
+                  <button type="button" onClick={useOriginalPaymentCount}
+                    className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-blue-50 transition-colors">
+                    Keep original # of payments ({originalRemainingPayments})
+                  </button>
+                )}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
