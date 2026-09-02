@@ -17,8 +17,9 @@ type ScheduleInfo = {
 type Props = {
   onClose: () => void
   onDone: () => void
-  studentId: string
-  purpose: 'tuition' | 'building_fund' | 'phone_charge'
+  ownerType: 'student' | 'donor'
+  ownerId: string
+  purpose: 'tuition' | 'building_fund' | 'phone_charge' | 'donation'
   purposeLabel: string
   schedule: ScheduleInfo
   remainingBalance: number
@@ -40,7 +41,7 @@ function cadenceLabel(intervalType: string, intervalCount: number) {
 // existing schedule and creates a new one on the same card/cadence — staff
 // confirms the numbers first rather than this happening automatically,
 // since it's a real change to live billing.
-export default function RecalculateScheduleModal({ onClose, onDone, studentId, purpose, purposeLabel, schedule, remainingBalance }: Props) {
+export default function RecalculateScheduleModal({ onClose, onDone, ownerType, ownerId, purpose, purposeLabel, schedule, remainingBalance }: Props) {
   const [loadingStatus, setLoadingStatus] = useState(true)
   const [statusError, setStatusError] = useState('')
   const [balance, setBalance] = useState(remainingBalance.toFixed(2))
@@ -107,7 +108,7 @@ export default function RecalculateScheduleModal({ onClose, onDone, studentId, p
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'student', id: studentId, amount: amt, purpose,
+          type: ownerType, id: ownerId, amount: amt, purpose,
           intervalType: schedule.interval_type, intervalCount: schedule.interval_count,
           totalPayments: n, startDate, paymentMethodId: schedule.payment_method_id,
         }),

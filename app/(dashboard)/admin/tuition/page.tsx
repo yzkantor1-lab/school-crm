@@ -952,6 +952,7 @@ export default function TuitionPage() {
 
 function TuitionTable({ students, pendingSola, onDataChanged }: { students: StudentWithTuition[]; pendingSola: Map<string, { count: number; total: number }>; onDataChanged: () => void }) {
   const supabase = createClient()
+  const router = useRouter()
   const [manageStudentId, setManageStudentId] = useState<string | null>(null)
   const [manageSavedMethods, setManageSavedMethods] = useState<{ id: string; label: string }[]>([])
 
@@ -1073,6 +1074,13 @@ function TuitionTable({ students, pendingSola, onDataChanged }: { students: Stud
           }))}
           savedMethods={manageSavedMethods}
           onChanged={onDataChanged}
+          // This list only has an aggregate balance per student (tuition +
+          // building fund combined), not the per-purpose figure Recalculate
+          // needs — computing that correctly means the same balance math the
+          // detail page already does. Rather than risk recalculating off a
+          // wrong number, hand off to the student's own tuition page, where
+          // Recalculate has the real per-purpose balance to work with.
+          onRecalculate={() => router.push(`/admin/tuition/${manageStudent.id}`)}
         />
       )}
     </div>

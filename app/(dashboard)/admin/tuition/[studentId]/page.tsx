@@ -1613,7 +1613,8 @@ export default function StudentTuitionPage() {
         <RecalculateScheduleModal
           onClose={() => setRecalcTarget(null)}
           onDone={load}
-          studentId={studentId}
+          ownerType="student"
+          ownerId={studentId}
           purpose={recalcTarget.purpose}
           purposeLabel={recalcTarget.purposeLabel}
           schedule={recalcTarget.schedule}

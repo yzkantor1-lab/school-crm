@@ -466,6 +466,10 @@ function DonorTable({ donors, schedules, pendingSola, onNavigate, searchTerm, on
           savedMethods={manageSavedMethods}
           initialScheduleId={manageDonorSchedules.length === 1 ? manageDonorSchedules[0].id : undefined}
           onChanged={onDataChanged}
+          // This list doesn't load per-donor pledge data (what Recalculate
+          // would default the remaining balance from) — hand off to the
+          // donor's own page, where that's already fetched.
+          onRecalculate={() => manageDonorId && onNavigate(manageDonorId)}
         />
       )}
     </div>

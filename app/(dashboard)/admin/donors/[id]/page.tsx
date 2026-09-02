@@ -18,6 +18,7 @@ import SentLettersPanel from '@/components/SentLettersPanel'
 import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
 import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
+import RecalculateScheduleModal from '@/components/sola/RecalculateScheduleModal'
 import IncomingSolaPayments, { type PendingSolaPayment } from '@/components/sola/IncomingSolaPayments'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
@@ -40,7 +41,9 @@ type Schedule = {
   id: string; purpose: string; amount: number
   interval_type: string; interval_count: number
   total_payments: number | null; payment_method_id: string | null
+  start_date: string
 }
+type Pledge = { id: string; amount: number; amount_paid: number; fulfilled: boolean }
 
 function scheduleCadence(s: Schedule) {
   const amt = formatCurrency(s.amount)
@@ -86,10 +89,12 @@ export default function DonorDetailPage() {
   } | null>(null)
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
   const [schedules, setSchedules] = useState<Schedule[]>([])
+  const [pledges, setPledges] = useState<Pledge[]>([])
   const [pendingSolaPayments, setPendingSolaPayments] = useState<PendingSolaPayment[]>([])
   const [showChargeModal, setShowChargeModal] = useState(false)
   const [showRecurringModal, setShowRecurringModal] = useState(false)
   const [showManageRecurring, setShowManageRecurring] = useState(false)
+  const [recalcTarget, setRecalcTarget] = useState<{ schedule: Schedule; remainingBalance: number } | null>(null)
   const [events, setEvents] = useState<EventOption[]>([])
   const [linkedStudents, setLinkedStudents] = useState<LinkedStudent[]>([])
   const [studentQuery, setStudentQuery] = useState('')
@@ -112,13 +117,14 @@ export default function DonorDetailPage() {
 
   const fetchData = useCallback(async () => {
     setLoading(true)
-    const [{ data: d }, { data: dn }, { data: pm }, { data: ev }, { data: ds }, { data: sch }] = await Promise.all([
+    const [{ data: d }, { data: dn }, { data: pm }, { data: ev }, { data: ds }, { data: sch }, { data: pl }] = await Promise.all([
       supabase.from('donors').select('*').eq('id', id).maybeSingle(),
       supabase.from('donations').select('*,events(name)').eq('donor_id', id).order('donation_date', { ascending: false }),
       supabase.from('payment_methods').select('id,label').eq('donor_id', id).order('created_at', { ascending: false }),
       supabase.from('events').select('id,name').order('event_date', { ascending: false }),
       supabase.from('donor_students').select('students(id,first_name,last_name)').eq('donor_id', id),
-      supabase.from('payment_schedules').select('id,purpose,amount,interval_type,interval_count,total_payments,payment_method_id').eq('donor_id', id).eq('status', 'active'),
+      supabase.from('payment_schedules').select('id,purpose,amount,interval_type,interval_count,total_payments,payment_method_id,start_date').eq('donor_id', id).eq('status', 'active'),
+      supabase.from('pledges').select('id,amount,amount_paid,fulfilled').eq('donor_id', id),
     ])
     setEvents(ev ?? [])
     setLinkedStudents(((ds ?? []) as unknown as { students: LinkedStudent }[]).map(r => r.students).filter(Boolean))
@@ -129,6 +135,7 @@ export default function DonorDetailPage() {
     setDonations((dn ?? []) as unknown as Donation[])
     setSavedPaymentMethods((pm || []).map(m => ({ id: m.id, label: m.label || 'Saved payment method' })))
     setSchedules(sch ?? [])
+    setPledges(pl ?? [])
     setLoading(false)
   }, [id, supabase])
 
@@ -288,6 +295,21 @@ export default function DonorDetailPage() {
 
   const shown = donations.filter(d => showArchived ? d.archived : !d.archived)
   const totalDonated = donations.filter(d => !d.archived).reduce((s, d) => s + Number(d.amount), 0)
+
+  // Default starting balance for Recalculate on a recurring donation — same
+  // "gives slowly over time" idea as tuition, but donors track that as a
+  // pledge (amount vs. amount_paid) rather than a plan. Only auto-fills
+  // when there's exactly one open pledge to attribute it to; with none or
+  // several, staff just types the number (see RecalculateScheduleModal —
+  // this is a starting suggestion, never enforced).
+  const openPledges = pledges.filter(p => !p.fulfilled && p.amount - p.amount_paid > 0.005)
+  const pledgeRemainingBalance = openPledges.length === 1 ? openPledges[0].amount - openPledges[0].amount_paid : 0
+
+  function openRecalculate(picked: { id: string }) {
+    const schedule = schedules.find(s => s.id === picked.id)
+    if (!schedule) return
+    setRecalcTarget({ schedule, remainingBalance: pledgeRemainingBalance })
+  }
 
   if (loading) return <div className="text-center py-12 text-slate-500">Loading...</div>
   if (!donor) return <div className="text-center py-12 text-slate-500">Donor not found.</div>
@@ -571,6 +593,19 @@ export default function DonorDetailPage() {
           savedMethods={savedPaymentMethods}
           initialScheduleId={schedules.length === 1 ? schedules[0].id : undefined}
           onChanged={fetchData}
+          onRecalculate={openRecalculate}
+        />
+      )}
+      {recalcTarget && (
+        <RecalculateScheduleModal
+          onClose={() => setRecalcTarget(null)}
+          onDone={fetchData}
+          ownerType="donor"
+          ownerId={id}
+          purpose="donation"
+          purposeLabel="Donation"
+          schedule={recalcTarget.schedule}
+          remainingBalance={recalcTarget.remainingBalance}
         />
       )}
     </div>
