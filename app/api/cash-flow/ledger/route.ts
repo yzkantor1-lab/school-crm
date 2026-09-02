@@ -81,19 +81,41 @@ function monthLabel(key: string): string {
   return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
 }
 
-// Projects active Sola recurring schedules (payment_schedules) forward across
-// the next 12 calendar months, independent of the ledger's own date-range
-// filter — this is about what's coming, not what already happened. Walks
-// each schedule's full theoretical occurrence sequence from its start_date
-// (respecting total_payments as a hard cap on the whole plan, fixed-length
-// payment plans included) and keeps only the occurrences landing in the
-// window, rather than trying to infer "payments remaining" — Sola is the
-// only source of truth for what's actually run so far, and calling it live
-// for every schedule just to draw this chart isn't worth the latency.
-function projectSchedules(schedules: {
+// Projects three sources of committed monthly income forward across the next
+// 12 calendar months, independent of the ledger's own date-range filter —
+// this is about what's coming, not what already happened:
+//
+//  1. Active Sola recurring schedules (payment_schedules) — walks each
+//     schedule's full theoretical occurrence sequence from its start_date
+//     (respecting total_payments as a hard cap on fixed-length payment
+//     plans) rather than trying to infer "payments remaining" — Sola is the
+//     only source of truth for what's actually run so far, and calling it
+//     live for every schedule just to draw this chart isn't worth the
+//     latency.
+//  2. Tuition plans on a monthly schedule that AREN'T billed through Sola
+//     (payment_amount set on tuition_plans, but no active Sola schedule for
+//     that student) — a family paying by check/cash/etc. on their own, or
+//     one whose Sola auto-charge hasn't been set up yet. Skipped for any
+//     student who already has an active Sola tuition schedule, so a plan
+//     that *is* wired up to Sola doesn't get counted twice.
+//  3. Recurring donations tracked outside Sola (recurring_donations) — same
+//     idea, for donors giving by check/etc. on a standing arrangement.
+type ScheduleSource = {
   purpose: string; amount: number; interval_type: string; interval_count: number
   total_payments: number | null; start_date: string
-}[], monthsAhead: number): { months: ProjectionMonth[]; totalsByType: Partial<Record<ScheduleType, number>>; total: number } {
+}
+type TuitionPlanSource = { amount: number; start_date: string | null; end_date: string | null }
+type RecurringDonationSource = {
+  amount: number; frequency: string; total_months: number | null
+  start_date: string; end_date: string | null
+}
+
+function buildProjection(
+  schedules: ScheduleSource[],
+  manualTuitionPlans: TuitionPlanSource[],
+  manualRecurringDonations: RecurringDonationSource[],
+  monthsAhead: number
+): { months: ProjectionMonth[]; totalsByType: Partial<Record<ScheduleType, number>>; total: number } {
   const horizonStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
   const horizonEnd = new Date(horizonStart.getFullYear(), horizonStart.getMonth() + monthsAhead, 0)
 
@@ -108,6 +130,15 @@ function projectSchedules(schedules: {
   const totalsByType: Partial<Record<ScheduleType, number>> = {}
   let total = 0
 
+  function add(type: ScheduleType, amount: number, atMonthStart: Date) {
+    const bucket = monthIndex.get(atMonthStart.toISOString().slice(0, 7))
+    if (!bucket) return
+    bucket.byType[type] = (bucket.byType[type] ?? 0) + amount
+    bucket.total += amount
+    totalsByType[type] = (totalsByType[type] ?? 0) + amount
+    total += amount
+  }
+
   for (const s of schedules) {
     const type = s.purpose as ScheduleType
     if (!['tuition', 'building_fund', 'phone_charge', 'donation'].includes(type)) continue
@@ -117,17 +148,37 @@ function projectSchedules(schedules: {
     const cap = s.total_payments ?? Infinity
     let iterations = 0
     while (count < cap && cur <= horizonEnd && iterations < 2000) {
-      if (cur >= horizonStart) {
-        const key = cur.toISOString().slice(0, 7)
-        const bucket = monthIndex.get(key)
-        if (bucket) {
-          bucket.byType[type] = (bucket.byType[type] ?? 0) + s.amount
-          bucket.total += s.amount
-          totalsByType[type] = (totalsByType[type] ?? 0) + s.amount
-          total += s.amount
-        }
-      }
+      if (cur >= horizonStart) add(type, s.amount, new Date(cur.getFullYear(), cur.getMonth(), 1))
       cur = addInterval(cur, s.interval_type, s.interval_count)
+      count++
+      iterations++
+    }
+  }
+
+  for (const p of manualTuitionPlans) {
+    const planStart = p.start_date ? new Date(`${p.start_date}T00:00:00`) : null
+    const planEnd = p.end_date ? new Date(`${p.end_date}T00:00:00`) : null
+    for (const m of months) {
+      const monthStart = new Date(`${m.key}-01T00:00:00`)
+      if (planStart && monthStart < new Date(planStart.getFullYear(), planStart.getMonth(), 1)) continue
+      if (planEnd && monthStart > planEnd) continue
+      add('tuition', p.amount, monthStart)
+    }
+  }
+
+  for (const r of manualRecurringDonations) {
+    const intervalType = r.frequency === 'yearly' ? 'year' : r.frequency === 'quarterly' ? 'quarter' : 'month'
+    let cur = new Date(`${r.start_date}T00:00:00`)
+    let count = 0
+    const cap = r.total_months != null
+      ? Math.ceil(r.total_months / (intervalType === 'year' ? 12 : intervalType === 'quarter' ? 3 : 1))
+      : Infinity
+    let iterations = 0
+    while (count < cap && cur <= horizonEnd && iterations < 2000) {
+      if (cur >= horizonStart && (!r.end_date || cur <= new Date(`${r.end_date}T00:00:00`))) {
+        add('donation', r.amount, new Date(cur.getFullYear(), cur.getMonth(), 1))
+      }
+      cur = intervalType === 'quarter' ? addInterval(cur, 'month', 3) : addInterval(cur, intervalType, 1)
       count++
       iterations++
     }
@@ -199,14 +250,57 @@ export async function GET(req: NextRequest) {
     const activeSchedules = await selectAll<{
       purpose: string; amount: number; interval_type: string; interval_count: number
       total_payments: number | null; start_date: string
+      student_id: string | null; donor_id: string | null
     }>((from, to) =>
       supabase.from('payment_schedules')
-        .select('purpose, amount, interval_type, interval_count, total_payments, start_date')
+        .select('purpose, amount, interval_type, interval_count, total_payments, start_date, student_id, donor_id')
         .eq('status', 'active')
         .order('id', { ascending: true })
         .range(from, to)
     )
-    const projection = projectSchedules(activeSchedules, 12)
+    const scheduledTuitionStudentIds = new Set(
+      activeSchedules.filter(s => s.purpose === 'tuition' && s.student_id).map(s => s.student_id)
+    )
+    const scheduledDonationDonorIds = new Set(
+      activeSchedules.filter(s => s.purpose === 'donation' && s.donor_id).map(s => s.donor_id)
+    )
+
+    // Families on a monthly tuition plan that isn't billed through Sola
+    // (checks, cash, etc., or Sola just hasn't been set up yet) — excludes
+    // anyone with an active Sola tuition schedule so they aren't projected
+    // twice.
+    const manualTuitionPlanRows = await selectAll<{
+      student_id: string; payment_amount: number; start_date: string | null; end_date: string | null
+    }>((from, to) =>
+      supabase.from('tuition_plans')
+        .select('student_id, payment_amount, start_date, end_date')
+        .eq('status', 'active')
+        .eq('payment_structure', 'monthly')
+        .not('payment_amount', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+    const manualTuitionPlans = manualTuitionPlanRows
+      .filter(p => !scheduledTuitionStudentIds.has(p.student_id))
+      .map(p => ({ amount: Number(p.payment_amount), start_date: p.start_date, end_date: p.end_date }))
+
+    // Recurring donations tracked outside Sola (same "checks/cash on a
+    // standing arrangement" idea, for donors instead of families).
+    const recurringDonationRows = await selectAll<{
+      donor_id: string; amount: number; frequency: string
+      total_months: number | null; start_date: string; end_date: string | null
+    }>((from, to) =>
+      supabase.from('recurring_donations')
+        .select('donor_id, amount, frequency, total_months, start_date, end_date')
+        .eq('active', true)
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+    const manualRecurringDonations = recurringDonationRows
+      .filter(r => !scheduledDonationDonorIds.has(r.donor_id))
+      .map(r => ({ amount: Number(r.amount), frequency: r.frequency, total_months: r.total_months, start_date: r.start_date, end_date: r.end_date }))
+
+    const projection = buildProjection(activeSchedules, manualTuitionPlans, manualRecurringDonations, 12)
 
     const expenseRows = await selectAll<{
       id: string; amount: number; date: string; category: string

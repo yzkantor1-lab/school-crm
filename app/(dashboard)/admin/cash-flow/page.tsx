@@ -250,7 +250,7 @@ export default function CashFlowPage() {
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="px-5 py-3 border-b border-slate-100">
             <p className="font-semibold text-slate-900">Monthly Projection</p>
-            <p className="text-xs text-slate-400 mt-0.5">Based on active recurring charges, next 12 months</p>
+            <p className="text-xs text-slate-400 mt-0.5">Based on active Sola recurring charges plus monthly tuition plans and recurring donations set up outside Sola, next 12 months</p>
           </div>
           <div className="p-4 grid grid-cols-2 sm:grid-cols-5 gap-3">
             {SCHEDULE_TYPES.map(t => (
