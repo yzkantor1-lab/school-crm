@@ -293,6 +293,18 @@ function getYearGroup(academicYear: string) {
   )
 }
 
+// "End of the year" for Recalculate purposes — the end date of the plan's
+// own last semester on the real 3-semester calendar (lib/semesters.ts), not
+// tuition_plans.end_date (a separate, rarely-filled-in field, and not what
+// "end of year" means here anyway). Respects plan_left_semester so a family
+// only enrolled through Semester 2 divides against that, not Semester 3.
+function planYearEndDate(plan: Pick<TuitionPlan, 'academic_year' | 'plan_left_semester'>): string | null {
+  const yearGroup = getYearGroup(plan.academic_year)
+  if (!yearGroup) return null
+  const leftSemNum = parseInt(plan.plan_left_semester || '3') || 3
+  return yearGroup.semesters[Math.min(2, Math.max(0, leftSemNum - 1))]?.endDate ?? null
+}
+
 function isSemesterStartDate(date: string, yearGroup?: ReturnType<typeof getYearGroup>): boolean {
   return !!date && !!yearGroup && yearGroup.semesters.some(s => s.startDate === date)
 }
@@ -1476,10 +1488,9 @@ export default function StudentTuitionPage() {
   function openRecalculate(picked: { id: string }) {
     const schedule = schedules.find(s => s.id === picked.id)
     if (!schedule) return
-    // currentPlan.end_date is the only "when does this need to be paid off
-    // by" date actually on file per student — used for all three purposes
-    // here since they all bill against the same current plan/year.
-    const yearEndDate = currentPlan?.end_date ?? null
+    // Same "end of year" used for all three purposes here, since they all
+    // bill against the same current plan/year.
+    const yearEndDate = currentPlan ? planYearEndDate(currentPlan) : null
     if (schedule.purpose === 'tuition') {
       setRecalcTarget({ purpose: 'tuition', purposeLabel: 'Tuition', schedule, remainingBalance: bfBal?.tuitionBalance ?? 0, yearEndDate })
     } else if (schedule.purpose === 'building_fund') {
@@ -2615,7 +2626,7 @@ export default function StudentTuitionPage() {
                           may no longer match the {formatCurrency(bal.tuitionBalance)} still owed.
                         </span>
                         <button
-                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'tuition', purposeLabel: 'Tuition', schedule: tuitionSchedule, remainingBalance: bal.tuitionBalance, yearEndDate: plan.end_date ?? null }) }}
+                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'tuition', purposeLabel: 'Tuition', schedule: tuitionSchedule, remainingBalance: bal.tuitionBalance, yearEndDate: planYearEndDate(plan) }) }}
                           className="shrink-0 font-semibold text-amber-900 hover:text-amber-950 underline"
                         >
                           Recalculate
@@ -2631,7 +2642,7 @@ export default function StudentTuitionPage() {
                           may no longer match the {formatCurrency(bal.buildingFundBalance)} still owed.
                         </span>
                         <button
-                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'building_fund', purposeLabel: 'Building Fund', schedule: buildingFundSchedule, remainingBalance: bal.buildingFundBalance, yearEndDate: plan.end_date ?? null }) }}
+                          onClick={e => { e.stopPropagation(); setRecalcTarget({ purpose: 'building_fund', purposeLabel: 'Building Fund', schedule: buildingFundSchedule, remainingBalance: bal.buildingFundBalance, yearEndDate: planYearEndDate(plan) }) }}
                           className="shrink-0 font-semibold text-amber-900 hover:text-amber-950 underline"
                         >
                           Recalculate
