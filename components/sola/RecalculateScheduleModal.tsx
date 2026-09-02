@@ -18,7 +18,7 @@ type Props = {
   onClose: () => void
   onDone: () => void
   studentId: string
-  purpose: 'tuition' | 'building_fund'
+  purpose: 'tuition' | 'building_fund' | 'phone_charge'
   purposeLabel: string
   schedule: ScheduleInfo
   remainingBalance: number
@@ -29,9 +29,13 @@ function cadenceLabel(intervalType: string, intervalCount: number) {
   return `every ${intervalCount} ${intervalType}s`
 }
 
-// Replaces an active schedule with a new one sized to what's actually still
-// owed — used when a manual payment lands mid-plan and the schedule's
-// original amount/payments-left no longer add up to the real balance.
+// Replaces an active schedule with a new one sized to divide a target amount
+// evenly across however many payments are left — the original use case was a
+// manual payment landing mid-plan and the schedule's math no longer adding
+// up to the real balance, but staff can open this anytime (e.g. a family
+// wants to resume in a later month, or gave an amount that hasn't been
+// recorded yet) and type in whatever amount/payments-left actually applies —
+// the incoming balance is only a starting suggestion, not enforced.
 // Sola has no "just change the remaining amount" API, so this cancels the
 // existing schedule and creates a new one on the same card/cadence — staff
 // confirms the numbers first rather than this happening automatically,
@@ -39,6 +43,7 @@ function cadenceLabel(intervalType: string, intervalCount: number) {
 export default function RecalculateScheduleModal({ onClose, onDone, studentId, purpose, purposeLabel, schedule, remainingBalance }: Props) {
   const [loadingStatus, setLoadingStatus] = useState(true)
   const [statusError, setStatusError] = useState('')
+  const [balance, setBalance] = useState(remainingBalance.toFixed(2))
   const [remainingPayments, setRemainingPayments] = useState('')
   const [amount, setAmount] = useState('')
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10))
@@ -67,9 +72,17 @@ export default function RecalculateScheduleModal({ onClose, onDone, studentId, p
     loadStatus()
   }, [schedule.id, schedule.total_payments, remainingBalance])
 
-  function recomputeAmount(nextRemainingPayments: string) {
+  function recompute(nextBalance: string, nextRemainingPayments: string) {
+    const b = parseFloat(nextBalance)
     const n = parseInt(nextRemainingPayments)
-    if (n > 0) setAmount((remainingBalance / n).toFixed(2))
+    if (n > 0 && b >= 0) setAmount((b / n).toFixed(2))
+  }
+  function onBalanceChange(v: string) {
+    setBalance(v)
+    recompute(v, remainingPayments)
+  }
+  function recomputeAmount(nextRemainingPayments: string) {
+    recompute(balance, nextRemainingPayments)
   }
 
   async function confirm() {
@@ -144,9 +157,15 @@ export default function RecalculateScheduleModal({ onClose, onDone, studentId, p
         ) : (
           <>
             <p className="text-sm text-slate-500">
-              {formatCurrency(remainingBalance)} still owed. This cancels the current {formatCurrency(schedule.amount)} {cadenceLabel(schedule.interval_type, schedule.interval_count)} schedule
-              and starts a new one — same card, same cadence — for whatever&apos;s actually left.
+              This cancels the current {formatCurrency(schedule.amount)} {cadenceLabel(schedule.interval_type, schedule.interval_count)} schedule
+              and starts a new one — same card, same cadence — for whatever amount and start date you set below.
+              The remaining balance is only a starting suggestion; change it if it doesn&apos;t match what&apos;s actually still owed.
             </p>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Remaining balance</label>
+              <input type="number" step="0.01" min="0" value={balance} onChange={e => onBalanceChange(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">Remaining payments</label>
@@ -161,7 +180,7 @@ export default function RecalculateScheduleModal({ onClose, onDone, studentId, p
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Next payment date</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Resume / next payment date</label>
               <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>

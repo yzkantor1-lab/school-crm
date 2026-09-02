@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { X, Loader2, Check, AlertCircle, ChevronLeft, Ban, Pencil, CreditCard } from 'lucide-react'
+import { X, Loader2, Check, AlertCircle, ChevronLeft, Ban, Pencil, CreditCard, Calculator } from 'lucide-react'
 import PaymentFields, { type PaymentFieldsHandle } from './PaymentFields'
 import { formatCurrency } from '@/lib/currency'
 
@@ -27,6 +27,13 @@ type Props = {
   savedMethods: SavedMethod[]
   initialScheduleId?: string
   onChanged?: () => void
+  // Opens the caller's own Recalculate flow for the active schedule — the
+  // caller owns the "what's actually still owed" math (it varies by
+  // purpose and needs data this generic modal doesn't have), so this modal
+  // just closes itself and hands back which schedule was picked. Omit to
+  // hide the Recalculate option entirely (e.g. donor recurring donations,
+  // where "balance owed" isn't a concept).
+  onRecalculate?: (schedule: ScheduleSummary) => void
 }
 
 const INTERVALS = [
@@ -43,7 +50,7 @@ function cadenceLabel(s: ScheduleSummary) {
   return s.interval_count === 1 ? `${amt} / ${s.interval_type}` : `${amt} every ${s.interval_count} ${s.interval_type}s`
 }
 
-export default function ManageRecurringModal({ onClose, type, schedules, savedMethods, initialScheduleId, onChanged }: Props) {
+export default function ManageRecurringModal({ onClose, type, schedules, savedMethods, initialScheduleId, onChanged, onRecalculate }: Props) {
   const [activeId, setActiveId] = useState<string | null>(
     initialScheduleId ?? (schedules.length === 1 ? schedules[0].id : null)
   )
@@ -208,10 +215,16 @@ export default function ManageRecurringModal({ onClose, type, schedules, savedMe
                 {savedMethods.find(m => m.id === active.payment_method_id)?.label ?? 'Card/bank on file'}
               </p>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className={`grid gap-2 ${onRecalculate ? 'grid-cols-4' : 'grid-cols-3'}`}>
               <button onClick={openEdit} className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
                 <Pencil size={15} /> Edit
               </button>
+              {onRecalculate && (
+                <button onClick={() => { onRecalculate(active); onClose() }}
+                  className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
+                  <Calculator size={15} /> Recalculate
+                </button>
+              )}
               <button onClick={openCardUpdate} className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
                 <CreditCard size={15} /> Update Card
               </button>

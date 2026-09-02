@@ -246,6 +246,23 @@ function phoneChargeTotals(allPayments: TuitionPayment[]) {
   return { phoneChargePayments, paid }
 }
 
+// Standard landline phone charge for the year, same for every student —
+// used only as the default starting point for Recalculate (see
+// RecalculateScheduleModal): $180/12mo = $15/mo, the schedule's usual rate.
+const PHONE_CHARGE_ANNUAL_AMOUNT = 180
+
+// "This year" for phone charge tracks the current tuition plan's own
+// start_date (the same academic-year boundary billing already uses)
+// rather than a separate stored cycle of its own — there's nowhere else a
+// phone-charge-specific year boundary would come from.
+function phoneChargeRemainingThisYear(allPayments: TuitionPayment[], currentPlanStartDate: string | null | undefined) {
+  const paidThisYear = allPayments
+    .filter(p => p.payment_type === 'phone_charge' && COUNTS_AS_PAID.includes(p.status)
+      && (!currentPlanStartDate || (p.payment_date && p.payment_date >= currentPlanStartDate)))
+    .reduce((s, p) => s + Number(p.amount), 0)
+  return Math.max(0, PHONE_CHARGE_ANNUAL_AMOUNT - paidThisYear)
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function paymentMethodLabel(v: string | null) {
@@ -845,7 +862,7 @@ export default function StudentTuitionPage() {
   const [pendingSolaPayments, setPendingSolaPayments] = useState<PendingSolaPayment[]>([])
   const [taxId, setTaxId] = useState('')
   const [recalcTarget, setRecalcTarget] = useState<{
-    purpose: 'tuition' | 'building_fund'; purposeLabel: string; schedule: PaymentSchedule; remainingBalance: number
+    purpose: 'tuition' | 'building_fund' | 'phone_charge'; purposeLabel: string; schedule: PaymentSchedule; remainingBalance: number
   } | null>(null)
 
   const load = useCallback(async () => {
@@ -1444,7 +1461,28 @@ export default function StudentTuitionPage() {
   const phoneSchedules = schedules.filter(s => s.purpose === 'phone_charge')
   const tuitionSchedule = schedules.find(s => s.purpose === 'tuition' && s.status === 'active')
   const buildingFundSchedule = schedules.find(s => s.purpose === 'building_fund' && s.status === 'active')
+  const phoneChargeRemainingBalance = phoneChargeRemainingThisYear(payments, currentPlan?.start_date)
   const activeSchedules = schedules.filter(s => s.status === 'active')
+
+  // Shared entry point for the Manage popup's Recalculate button, across
+  // whichever purpose the picked schedule turns out to be — each carries a
+  // different "what's actually still owed" default (tuition/building fund
+  // from the current plan's real balance, phone charge from the flat
+  // per-year amount), which RecalculateScheduleModal then lets staff edit
+  // freely rather than enforcing. Takes just the id (not ManageRecurringModal's
+  // own narrower ScheduleSummary) and looks the full row up here, since
+  // RecalculateScheduleModal needs fields (start_date) that summary doesn't carry.
+  function openRecalculate(picked: { id: string }) {
+    const schedule = schedules.find(s => s.id === picked.id)
+    if (!schedule) return
+    if (schedule.purpose === 'tuition') {
+      setRecalcTarget({ purpose: 'tuition', purposeLabel: 'Tuition', schedule, remainingBalance: bfBal?.tuitionBalance ?? 0 })
+    } else if (schedule.purpose === 'building_fund') {
+      setRecalcTarget({ purpose: 'building_fund', purposeLabel: 'Building Fund', schedule, remainingBalance: bfBal?.buildingFundBalance ?? 0 })
+    } else if (schedule.purpose === 'phone_charge') {
+      setRecalcTarget({ purpose: 'phone_charge', purposeLabel: 'Phone Charge', schedule, remainingBalance: phoneChargeRemainingBalance })
+    }
+  }
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -1568,6 +1606,7 @@ export default function StudentTuitionPage() {
           savedMethods={savedPaymentMethods}
           initialScheduleId={manageScheduleId}
           onChanged={load}
+          onRecalculate={openRecalculate}
         />
       )}
       {recalcTarget && (
