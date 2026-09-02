@@ -164,6 +164,7 @@ type SolaRawSchedule = {
   FailedTransactionRetryTimes?: number
   DaysBetweenRetries?: number
   Custom02?: string
+  LastProjectedPaymentDate?: string
 }
 
 // Exported so callers that need to read a live schedule's own fields (e.g.
@@ -228,12 +229,20 @@ async function replaceSchedule(scheduleId: string, overrides: Record<string, unk
 // simulated — see the schedule cancellation route for that distinction).
 export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateScheduleResult> {
   // EndDate must be strictly in the future ("xExpireDate must be in the
-  // future") — today is rejected even for a schedule that already ran today,
-  // so tomorrow is the earliest valid stop point. Today's already-processed
-  // charge (if any) is unaffected either way.
+  // future") AND not before the schedule's own next scheduled run — Sola
+  // won't retroactively cancel a charge it's already committed to run next,
+  // only the ones after it ("Schedule expiration date cannot be set to a
+  // value before the next run time", confirmed live on a schedule that
+  // bills mid-month while being stopped earlier in the month). "Tomorrow"
+  // is only valid when the next run is also tomorrow or sooner — otherwise
+  // it has to be pushed out to that next run date instead.
+  const current = await getScheduleRaw(scheduleId)
+  if (!current) return { ok: false, error: 'Schedule not found in Sola' }
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
-  return replaceSchedule(scheduleId, { EndDate: tomorrow.toISOString().slice(0, 10) })
+  const nextRun = current.LastProjectedPaymentDate ? new Date(current.LastProjectedPaymentDate) : null
+  const endDate = nextRun && nextRun > tomorrow ? nextRun : tomorrow
+  return replaceSchedule(scheduleId, { EndDate: endDate.toISOString().slice(0, 10) })
 }
 
 // Stamps Custom02 onto a Sola-native schedule — one created directly in
