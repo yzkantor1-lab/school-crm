@@ -227,21 +227,44 @@ async function replaceSchedule(scheduleId: string, overrides: Record<string, unk
 // callers only ever cancel schedules that exist (either a real one from live
 // mode, or one that was never actually created in Sola because it was
 // simulated — see the schedule cancellation route for that distinction).
+// Adds `days` calendar days to a "YYYY-MM-DD" date string, anchored to UTC
+// midnight so the arithmetic can't drift by a partial day depending on the
+// server's local timezone — see cancelSchedule for why that matters here.
+function addDaysToDateStr(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
 export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateScheduleResult> {
-  // EndDate must be strictly in the future ("xExpireDate must be in the
-  // future") AND not before the schedule's own next scheduled run — Sola
-  // won't retroactively cancel a charge it's already committed to run next,
-  // only the ones after it ("Schedule expiration date cannot be set to a
-  // value before the next run time", confirmed live on a schedule that
-  // bills mid-month while being stopped earlier in the month). "Tomorrow"
-  // is only valid when the next run is also tomorrow or sooner — otherwise
-  // it has to be pushed out to that next run date instead.
   const current = await getScheduleRaw(scheduleId)
   if (!current) return { ok: false, error: 'Schedule not found in Sola' }
-  const tomorrow = new Date()
-  tomorrow.setDate(tomorrow.getDate() + 1)
-  const nextRun = current.NextScheduledRunTime ? new Date(current.NextScheduledRunTime) : null
-  const endDate = nextRun && nextRun > tomorrow ? nextRun : tomorrow
+
+  // EndDate has to satisfy three constraints Sola enforces, all confirmed
+  // live: strictly in the future ("xExpireDate must be in the future"),
+  // not before the schedule's own next scheduled run ("cannot be set to a
+  // value before the next run time" — it won't retroactively cancel a
+  // charge it's already committed to run next), and strictly AFTER the
+  // schedule's own StartDate, not just on it ("xExpireDate must be after
+  // xStartDate" — hit on a schedule that hadn't run yet, where
+  // NextScheduledRunTime turned out to equal StartDate exactly).
+  //
+  // This has to be done in plain "YYYY-MM-DD" string comparisons, not Date
+  // objects: NextScheduledRunTime comes back with a time component
+  // ("2026-09-16 01:00:00"), parsed as local time, while StartDate is
+  // date-only ("2026-09-16"), parsed as UTC midnight — on a server west of
+  // UTC those land a few hours apart even though they're the same calendar
+  // day, which made an earlier Date-object version of this look like it
+  // satisfied "strictly after" while the truncated date string we actually
+  // send Sola collapsed right back onto the same day.
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const nextRunStr = current.NextScheduledRunTime ? current.NextScheduledRunTime.slice(0, 10) : null
+  const scheduleStartStr = current.StartDate.slice(0, 10)
+
+  let endDateStr = addDaysToDateStr(todayStr, 1)
+  if (nextRunStr && nextRunStr > endDateStr) endDateStr = nextRunStr
+  const minAfterStart = addDaysToDateStr(scheduleStartStr, 1)
+  if (minAfterStart > endDateStr) endDateStr = minAfterStart
   // EndDate and TotalPayments are mutually exclusive ways of ending a
   // schedule — Sola rejects setting both ("EndDate cannot be set if
   // TotalPayments is not set to one of the following values ['', 'null',
@@ -250,7 +273,7 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
   // otherwise carry the schedule's current TotalPayments straight through
   // alongside this EndDate override, so it has to be explicitly cleared
   // here rather than left to round-trip.
-  return replaceSchedule(scheduleId, { EndDate: endDate.toISOString().slice(0, 10), TotalPayments: null })
+  return replaceSchedule(scheduleId, { EndDate: endDateStr, TotalPayments: null })
 }
 
 // Stamps Custom02 onto a Sola-native schedule — one created directly in
