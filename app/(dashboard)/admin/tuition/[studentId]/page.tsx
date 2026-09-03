@@ -879,7 +879,10 @@ export default function StudentTuitionPage() {
     purpose: 'tuition' | 'building_fund' | 'phone_charge'; purposeLabel: string; schedule: PaymentSchedule
     remainingBalance: number; yearEndDate: string | null
   } | null>(null)
-  const [showCustomCalendar, setShowCustomCalendar] = useState(false)
+  const [customCalendarTarget, setCustomCalendarTarget] = useState<{
+    purpose: 'tuition' | 'building_fund' | 'phone_charge'; purposeLabel: string
+    remainingBalance: number; yearEndDate: string | null; cancelScheduleId?: string
+  } | null>(null)
   const [customCalendarRefreshKey, setCustomCalendarRefreshKey] = useState(0)
 
   const load = useCallback(async () => {
@@ -1478,6 +1481,7 @@ export default function StudentTuitionPage() {
   const phoneSchedules = schedules.filter(s => s.purpose === 'phone_charge')
   const tuitionSchedule = schedules.find(s => s.purpose === 'tuition' && s.status === 'active')
   const buildingFundSchedule = schedules.find(s => s.purpose === 'building_fund' && s.status === 'active')
+  const phoneChargeSchedule = phoneSchedules.find(s => s.status === 'active')
   const phoneChargeRemainingBalance = phoneChargeRemainingThisYear(payments, currentPlan?.start_date)
   const activeSchedules = schedules.filter(s => s.status === 'active')
 
@@ -1504,12 +1508,15 @@ export default function StudentTuitionPage() {
     }
   }
 
-  // Custom Calendar only supports tuition for now (customCalendarPurposes
-  // below) — the Manage popup's "Custom Calendar" button therefore only
-  // ever calls this when active.purpose is 'tuition', so there's no need to
-  // branch on which schedule was picked the way openRecalculate does.
-  function openCustomCalendar() {
-    setShowCustomCalendar(true)
+  function openCustomCalendar(purpose: 'tuition' | 'building_fund' | 'phone_charge') {
+    const yearEndDate = currentPlan ? planYearEndDate(currentPlan) : null
+    if (purpose === 'tuition') {
+      setCustomCalendarTarget({ purpose, purposeLabel: 'Tuition', remainingBalance: bfBal?.tuitionBalance ?? 0, yearEndDate, cancelScheduleId: tuitionSchedule?.id })
+    } else if (purpose === 'building_fund') {
+      setCustomCalendarTarget({ purpose, purposeLabel: 'Building Fund', remainingBalance: bfBal?.buildingFundBalance ?? 0, yearEndDate, cancelScheduleId: buildingFundSchedule?.id })
+    } else {
+      setCustomCalendarTarget({ purpose, purposeLabel: 'Phone Charge', remainingBalance: phoneChargeRemainingBalance, yearEndDate, cancelScheduleId: phoneChargeSchedule?.id })
+    }
   }
 
   return (
@@ -1635,8 +1642,8 @@ export default function StudentTuitionPage() {
           initialScheduleId={manageScheduleId}
           onChanged={load}
           onRecalculate={openRecalculate}
-          onCustomCalendar={openCustomCalendar}
-          customCalendarPurposes={['tuition']}
+          onCustomCalendar={s => openCustomCalendar(s.purpose as 'tuition' | 'building_fund' | 'phone_charge')}
+          customCalendarPurposes={['tuition', 'building_fund', 'phone_charge']}
         />
       )}
       {recalcTarget && (
@@ -1652,18 +1659,18 @@ export default function StudentTuitionPage() {
           yearEndDate={recalcTarget.yearEndDate}
         />
       )}
-      {showCustomCalendar && (
+      {customCalendarTarget && (
         <CustomCalendarModal
-          onClose={() => setShowCustomCalendar(false)}
-          onCreated={() => { load(); setCustomCalendarRefreshKey(k => k + 1); setShowCustomCalendar(false) }}
+          onClose={() => setCustomCalendarTarget(null)}
+          onCreated={() => { load(); setCustomCalendarRefreshKey(k => k + 1); setCustomCalendarTarget(null) }}
           ownerType="student"
           ownerId={studentId}
-          purpose="tuition"
-          purposeLabel="Tuition"
-          remainingBalance={bfBal?.tuitionBalance ?? 0}
-          yearEndDate={currentPlan ? planYearEndDate(currentPlan) : null}
+          purpose={customCalendarTarget.purpose}
+          purposeLabel={customCalendarTarget.purposeLabel}
+          remainingBalance={customCalendarTarget.remainingBalance}
+          yearEndDate={customCalendarTarget.yearEndDate}
           savedMethods={savedPaymentMethods}
-          cancelScheduleId={tuitionSchedule?.id}
+          cancelScheduleId={customCalendarTarget.cancelScheduleId}
         />
       )}
 
@@ -1915,6 +1922,10 @@ export default function StudentTuitionPage() {
                     <Repeat size={13} /> Set Up Recurring $15/mo
                   </button>
                 )}
+                <button onClick={() => openCustomCalendar('phone_charge')}
+                  className="flex items-center gap-1 text-xs text-slate-400 hover:text-sky-600 font-medium px-2.5 py-1.5 rounded-lg hover:bg-sky-50 transition-colors">
+                  <CalendarRange size={13} /> Custom Calendar
+                </button>
                 <button onClick={() => openAddPayment(PHONE_CHARGE_KEY)}
                   className="flex items-center gap-1 text-xs text-sky-600 hover:text-sky-700 font-medium px-2.5 py-1.5 rounded-lg hover:bg-sky-50 transition-colors">
                   <Plus size={13} /> Add Payment
@@ -1923,6 +1934,7 @@ export default function StudentTuitionPage() {
             </div>
 
             <div className="px-4 pb-4">
+              <CustomCalendarPanel ownerType="student" ownerId={studentId} purpose="phone_charge" refreshKey={customCalendarRefreshKey} />
               {showAddPayment === PHONE_CHARGE_KEY && (
                 <PaymentForm
                   form={paymentForm}
@@ -2613,7 +2625,7 @@ export default function StudentTuitionPage() {
                         </span>
                       )}
                       {plan.id === currentPlan?.id && (
-                        <button onClick={e => { e.stopPropagation(); openCustomCalendar() }}
+                        <button onClick={e => { e.stopPropagation(); openCustomCalendar('tuition') }}
                           className="text-slate-400 hover:text-blue-600 font-normal underline">
                           Custom Calendar
                         </button>
@@ -2646,6 +2658,17 @@ export default function StudentTuitionPage() {
                             </button>
                           </span>
                         )}
+                        {plan.id === currentPlan?.id && (
+                          <button onClick={e => { e.stopPropagation(); openCustomCalendar('building_fund') }}
+                            className="text-slate-400 hover:text-blue-600 font-normal underline">
+                            Custom Calendar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {plan.id === currentPlan?.id && (
+                      <div className="mt-2" onClick={e => e.stopPropagation()}>
+                        <CustomCalendarPanel ownerType="student" ownerId={studentId} purpose="building_fund" refreshKey={customCalendarRefreshKey} />
                       </div>
                     )}
                     {bal.buildingFund > 0 && (

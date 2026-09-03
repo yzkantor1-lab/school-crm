@@ -19,6 +19,8 @@ import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
 import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
 import RecalculateScheduleModal from '@/components/sola/RecalculateScheduleModal'
+import CustomCalendarModal from '@/components/sola/CustomCalendarModal'
+import CustomCalendarPanel from '@/components/sola/CustomCalendarPanel'
 import IncomingSolaPayments, { type PendingSolaPayment } from '@/components/sola/IncomingSolaPayments'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
@@ -95,6 +97,8 @@ export default function DonorDetailPage() {
   const [showRecurringModal, setShowRecurringModal] = useState(false)
   const [showManageRecurring, setShowManageRecurring] = useState(false)
   const [recalcTarget, setRecalcTarget] = useState<{ schedule: Schedule; remainingBalance: number; yearEndDate: string | null } | null>(null)
+  const [showCustomCalendar, setShowCustomCalendar] = useState(false)
+  const [customCalendarRefreshKey, setCustomCalendarRefreshKey] = useState(0)
   const [events, setEvents] = useState<EventOption[]>([])
   const [linkedStudents, setLinkedStudents] = useState<LinkedStudent[]>([])
   const [studentQuery, setStudentQuery] = useState('')
@@ -312,6 +316,10 @@ export default function DonorDetailPage() {
     setRecalcTarget({ schedule, remainingBalance: pledgeRemainingBalance, yearEndDate: pledgeYearEndDate })
   }
 
+  function openCustomCalendar() {
+    setShowCustomCalendar(true)
+  }
+
   if (loading) return <div className="text-center py-12 text-slate-500">Loading...</div>
   if (!donor) return <div className="text-center py-12 text-slate-500">Donor not found.</div>
 
@@ -349,6 +357,7 @@ export default function DonorDetailPage() {
               <>
                 <button onClick={() => setShowChargeModal(true)} className="flex items-center gap-2 bg-green-600 text-white px-3 py-1.5 rounded-lg hover:bg-green-700 transition text-sm"><CreditCard size={14} />Charge Now</button>
                 <button onClick={() => setShowRecurringModal(true)} className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition text-sm">Recurring</button>
+                <button onClick={openCustomCalendar} className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition text-sm">Custom Calendar</button>
                 <button onClick={() => setIsEditingDonor(true)} className="flex items-center gap-2 bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition text-sm"><Edit2 size={14} />Edit</button>
                 <button onClick={deleteDonor} className="flex items-center gap-2 bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700 transition text-sm"><Trash2 size={14} />Delete</button>
               </>
@@ -359,6 +368,10 @@ export default function DonorDetailPage() {
               </>
             )}
           </div>
+        </div>
+
+        <div className="mt-2">
+          <CustomCalendarPanel ownerType="donor" ownerId={id} purpose="donation" refreshKey={customCalendarRefreshKey} />
         </div>
 
         {isEditingDonor ? (
@@ -595,6 +608,8 @@ export default function DonorDetailPage() {
           initialScheduleId={schedules.length === 1 ? schedules[0].id : undefined}
           onChanged={fetchData}
           onRecalculate={openRecalculate}
+          onCustomCalendar={openCustomCalendar}
+          customCalendarPurposes={['donation']}
         />
       )}
       {recalcTarget && (
@@ -608,6 +623,20 @@ export default function DonorDetailPage() {
           schedule={recalcTarget.schedule}
           remainingBalance={recalcTarget.remainingBalance}
           yearEndDate={recalcTarget.yearEndDate}
+        />
+      )}
+      {showCustomCalendar && (
+        <CustomCalendarModal
+          onClose={() => setShowCustomCalendar(false)}
+          onCreated={() => { fetchData(); setCustomCalendarRefreshKey(k => k + 1); setShowCustomCalendar(false) }}
+          ownerType="donor"
+          ownerId={id}
+          purpose="donation"
+          purposeLabel="Donation"
+          remainingBalance={pledgeRemainingBalance}
+          yearEndDate={pledgeYearEndDate}
+          savedMethods={savedPaymentMethods}
+          cancelScheduleId={schedules.find(s => s.purpose === 'donation')?.id}
         />
       )}
     </div>
