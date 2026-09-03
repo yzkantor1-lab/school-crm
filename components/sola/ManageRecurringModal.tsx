@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { X, Loader2, Check, AlertCircle, ChevronLeft, Ban, Pencil, CreditCard, Calculator } from 'lucide-react'
+import { X, Loader2, Check, AlertCircle, ChevronLeft, Ban, Pencil, CreditCard, Calculator, CalendarRange } from 'lucide-react'
 import PaymentFields, { type PaymentFieldsHandle } from './PaymentFields'
 import { formatCurrency } from '@/lib/currency'
 
@@ -34,6 +34,12 @@ type Props = {
   // hide the Recalculate option entirely (e.g. donor recurring donations,
   // where "balance owed" isn't a concept).
   onRecalculate?: (schedule: ScheduleSummary) => void
+  // Same idea as onRecalculate — opens the caller's custom per-period
+  // calendar flow. customCalendarPurposes restricts which purposes show the
+  // option at all (e.g. just 'tuition' while the rest are still being
+  // built out); omit onCustomCalendar entirely to hide it everywhere.
+  onCustomCalendar?: (schedule: ScheduleSummary) => void
+  customCalendarPurposes?: string[]
 }
 
 const INTERVALS = [
@@ -50,7 +56,9 @@ function cadenceLabel(s: ScheduleSummary) {
   return s.interval_count === 1 ? `${amt} / ${s.interval_type}` : `${amt} every ${s.interval_count} ${s.interval_type}s`
 }
 
-export default function ManageRecurringModal({ onClose, type, schedules, savedMethods, initialScheduleId, onChanged, onRecalculate }: Props) {
+export default function ManageRecurringModal({
+  onClose, type, schedules, savedMethods, initialScheduleId, onChanged, onRecalculate, onCustomCalendar, customCalendarPurposes,
+}: Props) {
   const [activeId, setActiveId] = useState<string | null>(
     initialScheduleId ?? (schedules.length === 1 ? schedules[0].id : null)
   )
@@ -215,23 +223,35 @@ export default function ManageRecurringModal({ onClose, type, schedules, savedMe
                 {savedMethods.find(m => m.id === active.payment_method_id)?.label ?? 'Card/bank on file'}
               </p>
             </div>
-            <div className={`grid gap-2 ${onRecalculate ? 'grid-cols-4' : 'grid-cols-3'}`}>
-              <button onClick={openEdit} className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
-                <Pencil size={15} /> Edit
-              </button>
-              {onRecalculate && (
-                <button onClick={() => { onRecalculate(active); onClose() }}
-                  className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
-                  <Calculator size={15} /> Recalculate
-                </button>
-              )}
-              <button onClick={openCardUpdate} className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
-                <CreditCard size={15} /> Update Card
-              </button>
-              <button onClick={stop} disabled={busy} className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-red-200 hover:bg-red-50 text-xs font-medium text-red-600 disabled:opacity-50">
-                <Ban size={15} /> Stop
-              </button>
-            </div>
+            {(() => {
+              const showCustomCalendar = !!onCustomCalendar && (!customCalendarPurposes || customCalendarPurposes.includes(active.purpose))
+              const count = 3 + (onRecalculate ? 1 : 0) + (showCustomCalendar ? 1 : 0)
+              return (
+                <div className={`grid gap-2 ${count >= 5 ? 'grid-cols-3 sm:grid-cols-5' : count === 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
+                  <button onClick={openEdit} className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
+                    <Pencil size={15} /> Edit
+                  </button>
+                  {onRecalculate && (
+                    <button onClick={() => { onRecalculate(active); onClose() }}
+                      className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
+                      <Calculator size={15} /> Recalculate
+                    </button>
+                  )}
+                  {showCustomCalendar && (
+                    <button onClick={() => { onCustomCalendar!(active); onClose() }}
+                      className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
+                      <CalendarRange size={15} /> Custom Calendar
+                    </button>
+                  )}
+                  <button onClick={openCardUpdate} className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-xs font-medium text-slate-700">
+                    <CreditCard size={15} /> Update Card
+                  </button>
+                  <button onClick={stop} disabled={busy} className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border border-red-200 hover:bg-red-50 text-xs font-medium text-red-600 disabled:opacity-50">
+                    <Ban size={15} /> Stop
+                  </button>
+                </div>
+              )
+            })()}
           </div>
         )}
 

@@ -24,6 +24,8 @@ import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
 import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
 import RecalculateScheduleModal from '@/components/sola/RecalculateScheduleModal'
+import CustomCalendarModal from '@/components/sola/CustomCalendarModal'
+import CustomCalendarPanel from '@/components/sola/CustomCalendarPanel'
 import IncomingSolaPayments, { type PendingSolaPayment } from '@/components/sola/IncomingSolaPayments'
 
 type Student = {
@@ -877,6 +879,8 @@ export default function StudentTuitionPage() {
     purpose: 'tuition' | 'building_fund' | 'phone_charge'; purposeLabel: string; schedule: PaymentSchedule
     remainingBalance: number; yearEndDate: string | null
   } | null>(null)
+  const [showCustomCalendar, setShowCustomCalendar] = useState(false)
+  const [customCalendarRefreshKey, setCustomCalendarRefreshKey] = useState(0)
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -1500,6 +1504,14 @@ export default function StudentTuitionPage() {
     }
   }
 
+  // Custom Calendar only supports tuition for now (customCalendarPurposes
+  // below) — the Manage popup's "Custom Calendar" button therefore only
+  // ever calls this when active.purpose is 'tuition', so there's no need to
+  // branch on which schedule was picked the way openRecalculate does.
+  function openCustomCalendar() {
+    setShowCustomCalendar(true)
+  }
+
   return (
     <div className="max-w-4xl space-y-6">
       {/* Breadcrumb */}
@@ -1623,6 +1635,8 @@ export default function StudentTuitionPage() {
           initialScheduleId={manageScheduleId}
           onChanged={load}
           onRecalculate={openRecalculate}
+          onCustomCalendar={openCustomCalendar}
+          customCalendarPurposes={['tuition']}
         />
       )}
       {recalcTarget && (
@@ -1636,6 +1650,20 @@ export default function StudentTuitionPage() {
           schedule={recalcTarget.schedule}
           remainingBalance={recalcTarget.remainingBalance}
           yearEndDate={recalcTarget.yearEndDate}
+        />
+      )}
+      {showCustomCalendar && (
+        <CustomCalendarModal
+          onClose={() => setShowCustomCalendar(false)}
+          onCreated={() => { load(); setCustomCalendarRefreshKey(k => k + 1); setShowCustomCalendar(false) }}
+          ownerType="student"
+          ownerId={studentId}
+          purpose="tuition"
+          purposeLabel="Tuition"
+          remainingBalance={bfBal?.tuitionBalance ?? 0}
+          yearEndDate={currentPlan ? planYearEndDate(currentPlan) : null}
+          savedMethods={savedPaymentMethods}
+          cancelScheduleId={tuitionSchedule?.id}
         />
       )}
 
@@ -2584,7 +2612,18 @@ export default function StudentTuitionPage() {
                           </button>
                         </span>
                       )}
+                      {plan.id === currentPlan?.id && (
+                        <button onClick={e => { e.stopPropagation(); openCustomCalendar() }}
+                          className="text-slate-400 hover:text-blue-600 font-normal underline">
+                          Custom Calendar
+                        </button>
+                      )}
                     </div>
+                    {plan.id === currentPlan?.id && (
+                      <div className="mt-2" onClick={e => e.stopPropagation()}>
+                        <CustomCalendarPanel ownerType="student" ownerId={studentId} purpose="tuition" refreshKey={customCalendarRefreshKey} />
+                      </div>
+                    )}
                     {(bal.buildingFund > 0 || plan.building_fund_waived) && (
                       <div className="flex items-center gap-4 mt-1 text-sm text-slate-500 flex-wrap">
                         {plan.building_fund_waived ? (
