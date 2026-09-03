@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { X, Send, Loader2, Check, AlertCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { archiveTuitionDocument, archiveDonorDocument } from '@/lib/documentArchive'
 
 type Props = {
   onClose: () => void
@@ -12,8 +13,13 @@ type Props = {
   defaultBody: string
   buildAttachment: () => Promise<{ filename: string; base64: string }>
   // Who this letter is about, so the send gets logged to their Communications
-  // history — lets you check later whether it was actually sent.
-  logContext?: { studentId?: string; donorId?: string }
+  // history (lets you check later whether it was actually sent) and, for a
+  // student or donor, also archived into their own Documents section —
+  // separate from that chronological log, this is where staff actually look
+  // to pull up exactly what was sent (including whatever note was added).
+  // academicYear/tuitionPlanId are tuition-specific extras: when set, the
+  // archived copy also links to that plan, same as a manually uploaded one.
+  logContext?: { studentId?: string; donorId?: string; academicYear?: string | null; tuitionPlanId?: string }
 }
 
 type EmailAccountOption = { id: string; label: string; email: string; is_default: boolean }
@@ -75,6 +81,16 @@ export default function EmailPdfModal({ onClose, defaultRecipients, defaultSubje
           sent_from_email: json.fromEmail ?? null,
         }])
         if (logError) console.warn('Failed to log sent letter:', logError.message)
+
+        const sentNote = `Emailed to ${addresses.join(', ')} on ${new Date().toLocaleDateString()}`
+        if (logContext.studentId) {
+          archiveTuitionDocument(supabase, {
+            studentId: logContext.studentId, fileName: filename, base64,
+            academicYear: logContext.academicYear, tuitionPlanId: logContext.tuitionPlanId, notes: sentNote,
+          })
+        } else if (logContext.donorId) {
+          archiveDonorDocument(supabase, { donorId: logContext.donorId, fileName: filename, base64, notes: sentNote })
+        }
       }
     } catch (err) {
       setResult({ type: 'error', msg: err instanceof Error ? err.message : 'Failed to send' })

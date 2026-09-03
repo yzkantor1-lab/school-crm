@@ -21,6 +21,8 @@ import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
 import RecalculateScheduleModal from '@/components/sola/RecalculateScheduleModal'
 import CustomCalendarModal from '@/components/sola/CustomCalendarModal'
 import CustomCalendarPanel from '@/components/sola/CustomCalendarPanel'
+import DonorDocumentsPanel from '@/components/DonorDocumentsPanel'
+import { archiveDonorDocument } from '@/lib/documentArchive'
 import IncomingSolaPayments, { type PendingSolaPayment } from '@/components/sola/IncomingSolaPayments'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
@@ -293,6 +295,7 @@ export default function DonorDetailPage() {
       type: 'print', subject, donor_id: id, attachment_filename: filename, pdf_base64: base64,
     }])
     if (error) console.warn('Failed to log printed letter:', error.message)
+    archiveDonorDocument(supabase, { donorId: id, fileName: filename, base64, notes: `Printed on ${new Date().toLocaleDateString()}` })
   }
 
   function emailReceipt(donation: Donation) {
@@ -392,8 +395,9 @@ export default function DonorDetailPage() {
           </div>
         </div>
 
-        <div className="mt-2">
+        <div className="mt-2 space-y-3">
           <CustomCalendarPanel ownerType="donor" ownerId={id} purpose="donation" refreshKey={customCalendarRefreshKey} />
+          <DonorDocumentsPanel donorId={id} />
         </div>
 
         {isEditingDonor ? (

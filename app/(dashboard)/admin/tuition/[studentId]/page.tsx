@@ -26,6 +26,7 @@ import ManageRecurringModal from '@/components/sola/ManageRecurringModal'
 import RecalculateScheduleModal from '@/components/sola/RecalculateScheduleModal'
 import CustomCalendarModal from '@/components/sola/CustomCalendarModal'
 import CustomCalendarPanel from '@/components/sola/CustomCalendarPanel'
+import { archiveTuitionDocument } from '@/lib/documentArchive'
 import IncomingSolaPayments, { type PendingSolaPayment } from '@/components/sola/IncomingSolaPayments'
 
 type Student = {
@@ -835,11 +836,15 @@ export default function StudentTuitionPage() {
     defaultSubject: string
     defaultBody: string
     buildAttachment: () => Promise<{ filename: string; base64: string }>
+    academicYear?: string | null
+    tuitionPlanId?: string
   } | null>(null)
   const [pendingPrint, setPendingPrint] = useState<{
     title: string
     subject: string
     run: (note: string | undefined, fontSize: number, win: Window | null) => Promise<{ base64: string; filename: string }>
+    academicYear?: string | null
+    tuitionPlanId?: string
   } | null>(null)
   // Composing the note (with a live preview) before an email's own compose
   // step opens — lets the note text/size be adjusted and re-previewed as
@@ -852,6 +857,8 @@ export default function StudentTuitionPage() {
     defaultBody: string
     buildAttachment: (note: string | undefined, fontSize: number) => Promise<{ base64: string; filename: string }>
     buildPreview: (note: string | undefined, fontSize: number, win: Window | null) => void
+    academicYear?: string | null
+    tuitionPlanId?: string
   } | null>(null)
   const [loading, setLoading]   = useState(true)
   const [loadError, setLoadError] = useState(false)
@@ -1318,6 +1325,7 @@ export default function StudentTuitionPage() {
       title: 'Add a note to this statement?',
       subject: `Tuition Statement — ${name} (${plan.academic_year})`,
       run: (note, fontSize, win) => generateTuitionBillPDF(billArgs(plan, planPayments, note, fontSize), win),
+      academicYear: plan.academic_year, tuitionPlanId: plan.id,
     })
   }
 
@@ -1329,6 +1337,7 @@ export default function StudentTuitionPage() {
       title: 'Add a note to this receipt?',
       subject: `${typeLabel} Receipt — ${name}`,
       run: (note, fontSize, win) => generatePaymentReceiptPDF(receiptArgs(plan, payment, note, fontSize), win),
+      academicYear: plan.academic_year, tuitionPlanId: plan.id,
     })
   }
 
@@ -1343,6 +1352,7 @@ export default function StudentTuitionPage() {
       defaultBody: `Hi,\n\nPlease find attached the tuition statement for ${name} — ${plan.academic_year}.\n\nBalance due: ${bal.totalBalance > 0 ? formatCurrency(bal.totalBalance) : 'Paid in full'}.\n\nThank you.`,
       buildAttachment: (note, fontSize) => getTuitionBillPdfBase64(billArgs(plan, planPayments, note, fontSize)),
       buildPreview: (note, fontSize, win) => { generateTuitionBillPDF(billArgs(plan, planPayments, note, fontSize), win) },
+      academicYear: plan.academic_year, tuitionPlanId: plan.id,
     })
   }
 
@@ -1357,6 +1367,7 @@ export default function StudentTuitionPage() {
       defaultBody: `Hi,\n\nPlease find attached your receipt for the ${typeLabel.toLowerCase()} of ${formatCurrency(Number(payment.amount))}.\n\nThank you.`,
       buildAttachment: (note, fontSize) => getPaymentReceiptPdfBase64(receiptArgs(plan, payment, note, fontSize)),
       buildPreview: (note, fontSize, win) => { generatePaymentReceiptPDF(receiptArgs(plan, payment, note, fontSize), win) },
+      academicYear: plan.academic_year, tuitionPlanId: plan.id,
     })
   }
 
@@ -1452,23 +1463,27 @@ export default function StudentTuitionPage() {
   async function confirmPendingPrint(note: string | undefined, fontSize: number) {
     if (!pendingPrint) return
     const win = openPreviewTab()
-    const { subject } = pendingPrint
+    const { subject, academicYear, tuitionPlanId } = pendingPrint
     setPendingPrint(null)
     const { base64, filename } = await pendingPrint.run(note, fontSize, win)
     const { error } = await supabase.from('communications').insert([{
       type: 'print', subject, student_id: studentId, attachment_filename: filename, pdf_base64: base64,
     }])
     if (error) console.warn('Failed to log printed letter:', error.message)
+    archiveTuitionDocument(supabase, {
+      studentId, fileName: filename, base64, academicYear, tuitionPlanId,
+      notes: `Printed on ${new Date().toLocaleDateString()}`,
+    })
   }
 
   // Moves from the note-composing step to the actual Email compose modal —
   // nothing has been sent yet; Send in that modal is still the real action.
   function confirmPendingEmailNote(note: string | undefined, fontSize: number) {
     if (!pendingEmailNote) return
-    const { defaultRecipients, defaultSubject, defaultBody, buildAttachment } = pendingEmailNote
+    const { defaultRecipients, defaultSubject, defaultBody, buildAttachment, academicYear, tuitionPlanId } = pendingEmailNote
     setPendingEmailNote(null)
     setEmailModal({
-      defaultRecipients, defaultSubject, defaultBody,
+      defaultRecipients, defaultSubject, defaultBody, academicYear, tuitionPlanId,
       buildAttachment: () => buildAttachment(note, fontSize),
     })
   }
@@ -2952,7 +2967,7 @@ export default function StudentTuitionPage() {
           defaultSubject={emailModal.defaultSubject}
           defaultBody={emailModal.defaultBody}
           buildAttachment={emailModal.buildAttachment}
-          logContext={{ studentId }}
+          logContext={{ studentId, academicYear: emailModal.academicYear, tuitionPlanId: emailModal.tuitionPlanId }}
         />
       )}
       {pendingPrint && (
