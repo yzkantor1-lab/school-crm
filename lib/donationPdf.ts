@@ -21,6 +21,7 @@ type DonationReceiptOpts = {
   donor: ReceiptDonor
   donation: ReceiptDonation
   extraNote?: string
+  extraNoteFontSize?: number
   // Read from site_settings('tax_id') by the caller — this file has no
   // Supabase access of its own, it just renders whatever's passed in.
   taxId?: string | null
@@ -90,7 +91,7 @@ async function buildDonationReceiptDoc(opts: DonationReceiptOpts): Promise<{ doc
   doc.text('Thank you for your generous support.', 14, afterDisclaimerY)
 
   if (opts.extraNote) {
-    doc.setFontSize(9)
+    doc.setFontSize(opts.extraNoteFontSize ?? 9)
     doc.setFont('helvetica', 'italic')
     doc.setTextColor(80)
     const wrapWidth = doc.internal.pageSize.getWidth() - 28

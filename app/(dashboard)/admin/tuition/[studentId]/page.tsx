@@ -839,7 +839,19 @@ export default function StudentTuitionPage() {
   const [pendingPrint, setPendingPrint] = useState<{
     title: string
     subject: string
-    run: (note: string | undefined, win: Window | null) => Promise<{ base64: string; filename: string }>
+    run: (note: string | undefined, fontSize: number, win: Window | null) => Promise<{ base64: string; filename: string }>
+  } | null>(null)
+  // Composing the note (with a live preview) before an email's own compose
+  // step opens — lets the note text/size be adjusted and re-previewed as
+  // many times as needed before anything actually sends, unlike the old
+  // window.prompt() this replaced (one shot, no way to see the result).
+  const [pendingEmailNote, setPendingEmailNote] = useState<{
+    title: string
+    defaultRecipients: string[]
+    defaultSubject: string
+    defaultBody: string
+    buildAttachment: (note: string | undefined, fontSize: number) => Promise<{ base64: string; filename: string }>
+    buildPreview: (note: string | undefined, fontSize: number, win: Window | null) => void
   } | null>(null)
   const [loading, setLoading]   = useState(true)
   const [loadError, setLoadError] = useState(false)
@@ -1251,7 +1263,7 @@ export default function StudentTuitionPage() {
     load()
   }
 
-  function billArgs(plan: TuitionPlan, planPayments: TuitionPayment[], extraNote?: string) {
+  function billArgs(plan: TuitionPlan, planPayments: TuitionPayment[], extraNote?: string, extraNoteFontSize?: number) {
     const yearGroup = getYearGroup(plan.academic_year)
     const prorated = proratedInfo(plan.yearly_amount, plan.plan_came_semester || '1', plan.plan_left_semester || '3', yearGroup)
     const semesterRows = prorated && yearGroup
@@ -1272,10 +1284,11 @@ export default function StudentTuitionPage() {
       semesterRows,
       paymentMethodLabel,
       extraNote,
+      extraNoteFontSize,
     }
   }
 
-  function receiptArgs(plan: TuitionPlan, payment: TuitionPayment, extraNote?: string) {
+  function receiptArgs(plan: TuitionPlan, payment: TuitionPayment, extraNote?: string, extraNoteFontSize?: number) {
     const planPayments = payments.filter(p => p.tuition_plan_id === plan.id)
     const bal = planBalances(plan, planPayments)
     const balanceAfter = payment.payment_type === 'building_fund' ? bal.buildingFundBalance : bal.tuitionBalance
@@ -1287,6 +1300,7 @@ export default function StudentTuitionPage() {
       balanceAfter,
       paymentMethodLabel,
       extraNote,
+      extraNoteFontSize,
       taxId,
     }
   }
@@ -1303,7 +1317,7 @@ export default function StudentTuitionPage() {
     setPendingPrint({
       title: 'Add a note to this statement?',
       subject: `Tuition Statement — ${name} (${plan.academic_year})`,
-      run: (note, win) => generateTuitionBillPDF(billArgs(plan, planPayments, note), win),
+      run: (note, fontSize, win) => generateTuitionBillPDF(billArgs(plan, planPayments, note, fontSize), win),
     })
   }
 
@@ -1314,39 +1328,41 @@ export default function StudentTuitionPage() {
     setPendingPrint({
       title: 'Add a note to this receipt?',
       subject: `${typeLabel} Receipt — ${name}`,
-      run: (note, win) => generatePaymentReceiptPDF(receiptArgs(plan, payment, note), win),
+      run: (note, fontSize, win) => generatePaymentReceiptPDF(receiptArgs(plan, payment, note, fontSize), win),
     })
   }
 
   function emailBill(plan: TuitionPlan, planPayments: TuitionPayment[]) {
     if (!student) return
-    const note = prompt('Add a note to this statement? (optional)') || undefined
     const bal = planBalances(plan, planPayments)
     const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
-    setEmailModal({
+    setPendingEmailNote({
+      title: 'Add a note to this statement?',
       defaultRecipients: [student.father_email, student.mother_email].filter((e): e is string => !!e),
       defaultSubject: `Tuition Statement — ${name} (${plan.academic_year})`,
       defaultBody: `Hi,\n\nPlease find attached the tuition statement for ${name} — ${plan.academic_year}.\n\nBalance due: ${bal.totalBalance > 0 ? formatCurrency(bal.totalBalance) : 'Paid in full'}.\n\nThank you.`,
-      buildAttachment: () => getTuitionBillPdfBase64(billArgs(plan, planPayments, note)),
+      buildAttachment: (note, fontSize) => getTuitionBillPdfBase64(billArgs(plan, planPayments, note, fontSize)),
+      buildPreview: (note, fontSize, win) => { generateTuitionBillPDF(billArgs(plan, planPayments, note, fontSize), win) },
     })
   }
 
   function emailReceipt(plan: TuitionPlan, payment: TuitionPayment) {
     if (!student) return
-    const note = prompt('Add a note to this receipt? (optional)') || undefined
     const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
     const typeLabel = payment.payment_type === 'donation' ? 'Donation' : payment.payment_type === 'building_fund' ? 'Building Fund' : 'Payment'
-    setEmailModal({
+    setPendingEmailNote({
+      title: 'Add a note to this receipt?',
       defaultRecipients: [student.father_email, student.mother_email].filter((e): e is string => !!e),
       defaultSubject: `${typeLabel} Receipt — ${name}`,
       defaultBody: `Hi,\n\nPlease find attached your receipt for the ${typeLabel.toLowerCase()} of ${formatCurrency(Number(payment.amount))}.\n\nThank you.`,
-      buildAttachment: () => getPaymentReceiptPdfBase64(receiptArgs(plan, payment, note)),
+      buildAttachment: (note, fontSize) => getPaymentReceiptPdfBase64(receiptArgs(plan, payment, note, fontSize)),
+      buildPreview: (note, fontSize, win) => { generatePaymentReceiptPDF(receiptArgs(plan, payment, note, fontSize), win) },
     })
   }
 
   // Registration fee payments aren't tied to a plan/academic year, so they
   // get their own receipt helpers rather than routing through receiptArgs.
-  function regFeeReceiptArgs(payment: TuitionPayment, extraNote?: string) {
+  function regFeeReceiptArgs(payment: TuitionPayment, extraNote?: string, extraNoteFontSize?: number) {
     const bal = regFeeBalances(student!, payments)
     return {
       student: student!,
@@ -1359,6 +1375,7 @@ export default function StudentTuitionPage() {
       balanceAfter: bal.balance,
       paymentMethodLabel,
       extraNote,
+      extraNoteFontSize,
     }
   }
 
@@ -1368,19 +1385,20 @@ export default function StudentTuitionPage() {
     setPendingPrint({
       title: 'Add a note to this receipt?',
       subject: `Registration Fee Receipt — ${name}`,
-      run: (note, win) => generatePaymentReceiptPDF(regFeeReceiptArgs(payment, note), win),
+      run: (note, fontSize, win) => generatePaymentReceiptPDF(regFeeReceiptArgs(payment, note, fontSize), win),
     })
   }
 
   function emailRegFeeReceipt(payment: TuitionPayment) {
     if (!student) return
-    const note = prompt('Add a note to this receipt? (optional)') || undefined
     const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
-    setEmailModal({
+    setPendingEmailNote({
+      title: 'Add a note to this receipt?',
       defaultRecipients: [student.father_email, student.mother_email].filter((e): e is string => !!e),
       defaultSubject: `Registration Fee Receipt — ${name}`,
       defaultBody: `Hi,\n\nPlease find attached your receipt for the registration fee payment of ${formatCurrency(Number(payment.amount))}.\n\nThank you.`,
-      buildAttachment: () => getPaymentReceiptPdfBase64(regFeeReceiptArgs(payment, note)),
+      buildAttachment: (note, fontSize) => getPaymentReceiptPdfBase64(regFeeReceiptArgs(payment, note, fontSize)),
+      buildPreview: (note, fontSize, win) => { generatePaymentReceiptPDF(regFeeReceiptArgs(payment, note, fontSize), win) },
     })
   }
 
@@ -1388,7 +1406,7 @@ export default function StudentTuitionPage() {
   // there's no fixed total to be "in full" against (it's open-ended
   // recurring), so balanceAfter is always 0: after this month's payment,
   // nothing is outstanding for that period.
-  function phoneChargeReceiptArgs(payment: TuitionPayment, extraNote?: string) {
+  function phoneChargeReceiptArgs(payment: TuitionPayment, extraNote?: string, extraNoteFontSize?: number) {
     return {
       student: student!,
       plan: {
@@ -1400,6 +1418,7 @@ export default function StudentTuitionPage() {
       balanceAfter: 0,
       paymentMethodLabel,
       extraNote,
+      extraNoteFontSize,
     }
   }
 
@@ -1409,19 +1428,20 @@ export default function StudentTuitionPage() {
     setPendingPrint({
       title: 'Add a note to this receipt?',
       subject: `Phone Charge Receipt — ${name}`,
-      run: (note, win) => generatePaymentReceiptPDF(phoneChargeReceiptArgs(payment, note), win),
+      run: (note, fontSize, win) => generatePaymentReceiptPDF(phoneChargeReceiptArgs(payment, note, fontSize), win),
     })
   }
 
   function emailPhoneChargeReceipt(payment: TuitionPayment) {
     if (!student) return
-    const note = prompt('Add a note to this receipt? (optional)') || undefined
     const name = [student.first_name, student.last_name].filter(Boolean).join(' ')
-    setEmailModal({
+    setPendingEmailNote({
+      title: 'Add a note to this receipt?',
       defaultRecipients: [student.father_email, student.mother_email].filter((e): e is string => !!e),
       defaultSubject: `Phone Charge Receipt — ${name}`,
       defaultBody: `Hi,\n\nPlease find attached your receipt for the phone charge payment of ${formatCurrency(Number(payment.amount))}.\n\nThank you.`,
-      buildAttachment: () => getPaymentReceiptPdfBase64(phoneChargeReceiptArgs(payment, note)),
+      buildAttachment: (note, fontSize) => getPaymentReceiptPdfBase64(phoneChargeReceiptArgs(payment, note, fontSize)),
+      buildPreview: (note, fontSize, win) => { generatePaymentReceiptPDF(phoneChargeReceiptArgs(payment, note, fontSize), win) },
     })
   }
 
@@ -1429,16 +1449,28 @@ export default function StudentTuitionPage() {
   // actually authorizes opening the preview tab, so window.open() happens
   // synchronously right here, not before this handler runs. Logs the print
   // the same way emailing already logs a send, so Sent Letters shows both.
-  async function confirmPendingPrint(note: string | undefined) {
+  async function confirmPendingPrint(note: string | undefined, fontSize: number) {
     if (!pendingPrint) return
     const win = openPreviewTab()
     const { subject } = pendingPrint
     setPendingPrint(null)
-    const { base64, filename } = await pendingPrint.run(note, win)
+    const { base64, filename } = await pendingPrint.run(note, fontSize, win)
     const { error } = await supabase.from('communications').insert([{
       type: 'print', subject, student_id: studentId, attachment_filename: filename, pdf_base64: base64,
     }])
     if (error) console.warn('Failed to log printed letter:', error.message)
+  }
+
+  // Moves from the note-composing step to the actual Email compose modal —
+  // nothing has been sent yet; Send in that modal is still the real action.
+  function confirmPendingEmailNote(note: string | undefined, fontSize: number) {
+    if (!pendingEmailNote) return
+    const { defaultRecipients, defaultSubject, defaultBody, buildAttachment } = pendingEmailNote
+    setPendingEmailNote(null)
+    setEmailModal({
+      defaultRecipients, defaultSubject, defaultBody,
+      buildAttachment: () => buildAttachment(note, fontSize),
+    })
   }
 
   if (loading) return <div className="text-center py-12 text-slate-400 text-sm">Loading…</div>
@@ -2928,6 +2960,15 @@ export default function StudentTuitionPage() {
           title={pendingPrint.title}
           onConfirm={confirmPendingPrint}
           onClose={() => setPendingPrint(null)}
+        />
+      )}
+      {pendingEmailNote && (
+        <PrintNoteModal
+          title={pendingEmailNote.title}
+          confirmLabel="Continue to Email"
+          onPreview={pendingEmailNote.buildPreview}
+          onConfirm={confirmPendingEmailNote}
+          onClose={() => setPendingEmailNote(null)}
         />
       )}
     </div>

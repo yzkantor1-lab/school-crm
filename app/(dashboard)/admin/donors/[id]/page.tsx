@@ -87,7 +87,15 @@ export default function DonorDetailPage() {
   const [pendingPrint, setPendingPrint] = useState<{
     title: string
     subject: string
-    run: (note: string | undefined, win: Window | null) => Promise<{ base64: string; filename: string }>
+    run: (note: string | undefined, fontSize: number, win: Window | null) => Promise<{ base64: string; filename: string }>
+  } | null>(null)
+  const [pendingEmailNote, setPendingEmailNote] = useState<{
+    title: string
+    defaultRecipients: string[]
+    defaultSubject: string
+    defaultBody: string
+    buildAttachment: (note: string | undefined, fontSize: number) => Promise<{ base64: string; filename: string }>
+    buildPreview: (note: string | undefined, fontSize: number, win: Window | null) => void
   } | null>(null)
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
   const [schedules, setSchedules] = useState<Schedule[]>([])
@@ -243,7 +251,7 @@ export default function DonorDetailPage() {
     fetchData()
   }
 
-  function receiptOpts(donation: Donation, extraNote?: string) {
+  function receiptOpts(donation: Donation, extraNote?: string, extraNoteFontSize?: number) {
     return {
       donor: { name: donor!.name, email: donor!.email, address: donor!.address },
       donation: {
@@ -254,6 +262,7 @@ export default function DonorDetailPage() {
         notes: donation.notes,
       },
       extraNote,
+      extraNoteFontSize,
       taxId,
     }
   }
@@ -268,18 +277,18 @@ export default function DonorDetailPage() {
     setPendingPrint({
       title: 'Add a note to this receipt?',
       subject: `Donation Receipt — ${donor.name}`,
-      run: (note, win) => generateDonationReceiptPDF(receiptOpts(donation, note), win),
+      run: (note, fontSize, win) => generateDonationReceiptPDF(receiptOpts(donation, note, fontSize), win),
     })
   }
 
   // Logs the print the same way emailing already logs a send, so Sent
   // Letters shows both delivery methods.
-  async function confirmPendingPrint(note: string | undefined) {
+  async function confirmPendingPrint(note: string | undefined, fontSize: number) {
     if (!pendingPrint) return
     const win = openPreviewTab()
     const { subject } = pendingPrint
     setPendingPrint(null)
-    const { base64, filename } = await pendingPrint.run(note, win)
+    const { base64, filename } = await pendingPrint.run(note, fontSize, win)
     const { error } = await supabase.from('communications').insert([{
       type: 'print', subject, donor_id: id, attachment_filename: filename, pdf_base64: base64,
     }])
@@ -288,12 +297,25 @@ export default function DonorDetailPage() {
 
   function emailReceipt(donation: Donation) {
     if (!donor) return
-    const note = prompt('Add a note to this receipt? (optional)') || undefined
-    setEmailModal({
+    setPendingEmailNote({
+      title: 'Add a note to this receipt?',
       defaultRecipients: donor.email ? [donor.email] : [],
       defaultSubject: `Donation Receipt — ${donor.name}`,
       defaultBody: `Hi,\n\nPlease find attached your receipt for your generous donation of ${formatCurrency(Number(donation.amount))} on ${new Date(donation.donation_date + 'T00:00:00').toLocaleDateString()}.\n\nThank you for your support.`,
-      buildAttachment: () => getDonationReceiptPdfBase64(receiptOpts(donation, note)),
+      buildAttachment: (note, fontSize) => getDonationReceiptPdfBase64(receiptOpts(donation, note, fontSize)),
+      buildPreview: (note, fontSize, win) => { generateDonationReceiptPDF(receiptOpts(donation, note, fontSize), win) },
+    })
+  }
+
+  // Moves from the note-composing step to the actual Email compose modal —
+  // nothing has been sent yet; Send in that modal is still the real action.
+  function confirmPendingEmailNote(note: string | undefined, fontSize: number) {
+    if (!pendingEmailNote) return
+    const { defaultRecipients, defaultSubject, defaultBody, buildAttachment } = pendingEmailNote
+    setPendingEmailNote(null)
+    setEmailModal({
+      defaultRecipients, defaultSubject, defaultBody,
+      buildAttachment: () => buildAttachment(note, fontSize),
     })
   }
 
@@ -577,6 +599,15 @@ export default function DonorDetailPage() {
           title={pendingPrint.title}
           onConfirm={confirmPendingPrint}
           onClose={() => setPendingPrint(null)}
+        />
+      )}
+      {pendingEmailNote && (
+        <PrintNoteModal
+          title={pendingEmailNote.title}
+          confirmLabel="Continue to Email"
+          onPreview={pendingEmailNote.buildPreview}
+          onConfirm={confirmPendingEmailNote}
+          onClose={() => setPendingEmailNote(null)}
         />
       )}
       {showChargeModal && (

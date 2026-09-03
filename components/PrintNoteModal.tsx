@@ -1,7 +1,15 @@
 'use client'
 
 import { useState } from 'react'
-import { X } from 'lucide-react'
+import { X, Eye } from 'lucide-react'
+import { openPreviewTab } from '@/lib/pdfPreview'
+
+const FONT_SIZES = [
+  { label: 'Small', value: 7 },
+  { label: 'Normal', value: 9 },
+  { label: 'Large', value: 11 },
+  { label: 'X-Large', value: 13 },
+]
 
 // A real modal instead of window.prompt() — native prompt() has to run on
 // the same tab as the click that triggered it, but the PDF preview also
@@ -10,16 +18,30 @@ import { X } from 'lucide-react'
 // away from this tab, and browsers then silently suppress a prompt() fired
 // from a backgrounded tab; opening it after the prompt is too late for the
 // popup blocker. A modal has neither problem — the actual window.open()
-// only happens inside this modal's own Continue click, which is itself a
-// fresh, direct user gesture.
+// only happens inside this modal's own button clicks, each its own fresh,
+// direct user gesture.
+//
+// Doubles as the note-composing step before emailing (not just printing):
+// onPreview, when provided, lets staff see the actual PDF — note, font
+// size, and all — in a new tab before committing, without leaving this
+// modal, so the text or size can be adjusted and re-previewed as many
+// times as needed before Continue moves on to actually sending it.
 export default function PrintNoteModal({
-  title, onConfirm, onClose,
+  title, onConfirm, onClose, onPreview, confirmLabel = 'Continue',
 }: {
   title: string
-  onConfirm: (note: string | undefined) => void
+  onConfirm: (note: string | undefined, fontSize: number) => void
   onClose: () => void
+  onPreview?: (note: string | undefined, fontSize: number, win: Window | null) => void
+  confirmLabel?: string
 }) {
   const [note, setNote] = useState('')
+  const [fontSize, setFontSize] = useState(9)
+
+  function preview() {
+    const win = openPreviewTab()
+    onPreview?.(note.trim() || undefined, fontSize, win)
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -37,12 +59,33 @@ export default function PrintNoteModal({
           placeholder="Optional note to include…"
           className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
         />
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">Note text size</label>
+          <div className="flex gap-2">
+            {FONT_SIZES.map(f => (
+              <button key={f.value} type="button" onClick={() => setFontSize(f.value)}
+                className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                  fontSize === f.value ? 'bg-blue-50 border-blue-300 text-blue-700' : 'border-slate-200 text-slate-500'
+                }`}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="flex gap-2">
+          {onPreview && (
+            <button
+              onClick={preview}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
+            >
+              <Eye size={14} /> Preview
+            </button>
+          )}
           <button
-            onClick={() => onConfirm(note.trim() || undefined)}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            onClick={() => onConfirm(note.trim() || undefined, fontSize)}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
           >
-            Continue
+            {confirmLabel}
           </button>
           <button onClick={onClose}
             className="px-4 py-2 rounded-lg text-sm text-slate-600 border border-slate-200 hover:bg-slate-50 transition-colors">

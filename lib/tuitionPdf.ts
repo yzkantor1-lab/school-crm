@@ -40,6 +40,7 @@ type BillOpts = {
   semesterRows?: SemesterRow[]
   paymentMethodLabel: (v: string | null) => string
   extraNote?: string
+  extraNoteFontSize?: number
 }
 
 type ReceiptOpts = {
@@ -49,6 +50,7 @@ type ReceiptOpts = {
   balanceAfter: number
   paymentMethodLabel: (v: string | null) => string
   extraNote?: string
+  extraNoteFontSize?: number
   // Read from site_settings('tax_id') by the caller — only rendered for a
   // donation-type payment; tuition/registration/phone charges aren't
   // charitable contributions, so a Tax ID line there would be misleading.
@@ -69,10 +71,18 @@ function paymentTypeLabel(t: string | null | undefined) {
 
 const COUNTS_AS_PAID = ['paid', 'partial', 'forgiven']
 
-// Draws an ad-hoc note (added at print/email time, not stored on the record)
-// just above the letterhead footer. Returns the new y-coordinate.
-function drawExtraNote(doc: any, note: string, y: number): number {
-  doc.setFontSize(9)
+// Draws an ad-hoc note (added at print/email time, not stored on the
+// record). Returns the new y-coordinate so the caller can keep laying out
+// content below it. Placement varies by caller — see buildBillDoc, where
+// this goes right in the body of the letter rather than at the very
+// bottom: a long statement's tables push the footer down an unpredictable
+// amount, so a note pinned "just above the footer" could land anywhere
+// from right under the tables to overlapping the footer itself, per user
+// report. Right after the letter's own fixed-length text has no such
+// problem — it's always in the same place regardless of how long the
+// tables below it turn out to be.
+function drawExtraNote(doc: any, note: string, y: number, fontSize = 9): number {
+  doc.setFontSize(fontSize)
   doc.setFont('helvetica', 'italic')
   doc.setTextColor(80)
   const wrapWidth = doc.internal.pageSize.getWidth() - 28
@@ -80,7 +90,7 @@ function drawExtraNote(doc: any, note: string, y: number): number {
   doc.text(lines, 14, y)
   doc.setTextColor(0)
   doc.setFont('helvetica', 'normal')
-  return y + lines.length * 5
+  return y + lines.length * fontSize * 0.6
 }
 
 // Raw base64 (no "data:application/pdf;...;base64," prefix) suitable for email attachments.
@@ -134,6 +144,8 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
       doc.text(lines, 14, y)
       y += lines.length * 5 + 4
     }
+
+    if (opts.extraNote) y = drawExtraNote(doc, opts.extraNote, y, opts.extraNoteFontSize) + 4
 
     // A visual break between the sign-off above and the statement details
     // below, so the details don't read as part of the letter (e.g. the
@@ -245,8 +257,6 @@ async function buildBillDoc(opts: BillOpts): Promise<{ doc: any; filename: strin
     y = (doc as any).lastAutoTable.finalY + 8
   }
 
-  if (opts.extraNote) drawExtraNote(doc, opts.extraNote, y + 2)
-
   drawLetterheadFooter(doc)
 
   const filename = `tuition-statement-${name.replace(/\s+/g, '-').toLowerCase()}-${(opts.plan.academic_year || '').replace(/\s+/g, '')}.pdf`
@@ -344,7 +354,7 @@ async function buildReceiptDoc(opts: ReceiptOpts): Promise<{ doc: any; filename:
   doc.text(isDonation ? 'Thank you for your generous donation.' : 'Thank you for your payment.', 14, thankYouY)
   doc.setTextColor(0)
 
-  if (opts.extraNote) drawExtraNote(doc, opts.extraNote, thankYouY + 10)
+  if (opts.extraNote) drawExtraNote(doc, opts.extraNote, thankYouY + 10, opts.extraNoteFontSize)
 
   drawLetterheadFooter(doc)
 
