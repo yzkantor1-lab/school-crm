@@ -242,7 +242,15 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
   tomorrow.setDate(tomorrow.getDate() + 1)
   const nextRun = current.NextScheduledRunTime ? new Date(current.NextScheduledRunTime) : null
   const endDate = nextRun && nextRun > tomorrow ? nextRun : tomorrow
-  return replaceSchedule(scheduleId, { EndDate: endDate.toISOString().slice(0, 10) })
+  // EndDate and TotalPayments are mutually exclusive ways of ending a
+  // schedule — Sola rejects setting both ("EndDate cannot be set if
+  // TotalPayments is not set to one of the following values ['', 'null',
+  // '0']"), confirmed live on a schedule that had just been recalculated
+  // into a fixed-#-of-payments plan. replaceSchedule's base resend would
+  // otherwise carry the schedule's current TotalPayments straight through
+  // alongside this EndDate override, so it has to be explicitly cleared
+  // here rather than left to round-trip.
+  return replaceSchedule(scheduleId, { EndDate: endDate.toISOString().slice(0, 10), TotalPayments: null })
 }
 
 // Stamps Custom02 onto a Sola-native schedule — one created directly in
