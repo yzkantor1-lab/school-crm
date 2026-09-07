@@ -77,7 +77,7 @@ type SyncPayment = {
 type Student = { id: string; first_name: string; last_name: string }
 type Donor = { id: string; name: string }
 type EventOption = { id: string; name: string }
-type TuitionPlan = { id: string; student_id: string; academic_year: string | null; status: string | null }
+type TuitionPlan = { id: string; student_id: string; academic_year: string | null; status: string | null; start_date: string | null }
 type ExistingTuitionPayment = { id: string; student_id: string; amount: number; payment_date: string | null; payment_type: string | null }
 type ExistingDonation = { id: string; donor_id: string; amount: number; donation_date: string }
 
@@ -119,14 +119,27 @@ function categoryLabel(c: string | null) {
 function studentName(s: Student | undefined) {
   return s ? [s.first_name, s.last_name].filter(Boolean).join(' ') : '—'
 }
-function latestPlan(studentId: string, plans: TuitionPlan[]): TuitionPlan | null {
+// Whichever of this student's plans has a start_date closest (either
+// direction) to the payment's own date — not "the latest academic year,"
+// which is what this used to pick regardless of the payment's actual date
+// and could misattribute an old payment onto the current plan (same bug,
+// same fix, as IncomingSolaPayments' own default). Nearest-start rather
+// than requiring the date to fall within [start_date, end_date] because
+// this school's payment dates routinely land a week or two before the
+// plan's own recorded start_date.
+function bestPlanForDate(studentId: string, dateStr: string | null, plans: TuitionPlan[]): TuitionPlan | null {
   const mine = plans.filter(p => p.student_id === studentId)
   if (!mine.length) return null
-  return [...mine].sort((a, b) => {
-    const yearCmp = (b.academic_year || '').localeCompare(a.academic_year || '')
-    if (yearCmp !== 0) return yearCmp
-    return (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1)
-  })[0]
+  if (!dateStr) return mine[0]
+  const targetMs = new Date(`${dateStr}T00:00:00`).getTime()
+  let best = mine[0]
+  let bestDiff = Infinity
+  for (const p of mine) {
+    if (!p.start_date) continue
+    const diff = Math.abs(new Date(`${p.start_date}T00:00:00`).getTime() - targetMs)
+    if (diff < bestDiff) { bestDiff = diff; best = p }
+  }
+  return best
 }
 
 // ── Search-and-link pickers ──────────────────────────────────────────────────
@@ -197,7 +210,7 @@ export default function SolaSyncPage() {
       supabase.from('students').select('id,first_name,last_name').order('last_name'),
       supabase.from('donors').select('id,name').order('name'),
       supabase.from('events').select('id,name').order('event_date', { ascending: false }),
-      supabase.from('tuition_plans').select('id,student_id,academic_year,status'),
+      supabase.from('tuition_plans').select('id,student_id,academic_year,status,start_date'),
     ])
     setSyncCustomers((sc ?? []) as SyncCustomer[])
     setSyncSchedules(ss ?? [])
@@ -334,7 +347,7 @@ export default function SolaSyncPage() {
     const schedule = payment.sola_sync_schedule_id ? syncSchedules.find(s => s.id === payment.sola_sync_schedule_id) : undefined
     const plan = schedule?.default_tuition_plan_id
       ? tuitionPlans.find(pl => pl.id === schedule.default_tuition_plan_id)
-      : (studentId ? latestPlan(studentId, tuitionPlans) : null)
+      : (studentId ? bestPlanForDate(studentId, payment.transaction_date, tuitionPlans) : null)
     return {
       kind: payment.charge_kind === 'ambiguous' ? null : payment.charge_kind,
       feeType: payment.suggested_fee_type ?? 'tuition',

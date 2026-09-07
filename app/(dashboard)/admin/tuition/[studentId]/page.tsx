@@ -1522,7 +1522,9 @@ export default function StudentTuitionPage() {
     (bfPayments.length > 0 && (bfBal?.buildingFundBalance ?? 0) <= 0.005 &&
       bfPayments.filter(p => COUNTS_AS_PAID.includes(p.status)).every(p => p.status === 'forgiven'))
 
-  // Current plan first so IncomingSolaPayments defaults an inline import to it.
+  // Current plan first in the dropdown for convenience — IncomingSolaPayments
+  // no longer defaults to whichever plan is first, it picks whichever plan's
+  // start_date is closest to the payment's own date.
   const plansForSolaReview = currentPlan ? [currentPlan, ...plans.filter(p => p.id !== currentPlan.id)] : plans
 
   const phoneSchedules = schedules.filter(s => s.purpose === 'phone_charge')

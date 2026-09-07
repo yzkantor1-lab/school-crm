@@ -19,7 +19,7 @@ export type PendingSolaPayment = {
 
 type FeeType = 'tuition' | 'building_fund' | 'registration_fee'
 type DonationCategory = 'monthly_recurring' | 'one_time' | 'event'
-type Plan = { id: string; academic_year: string | null }
+type Plan = { id: string; academic_year: string | null; start_date: string | null }
 type EventOption = { id: string; name: string }
 
 type Decision = { kind: 'tuition' | 'donation' | null; feeType: FeeType; planId: string; category: DonationCategory; eventId: string; confirmSchedule: boolean }
@@ -34,11 +34,35 @@ function kindLabel(p: PendingSolaPayment) {
   return 'looks like a Donation'
 }
 
-function defaultDecision(p: PendingSolaPayment, defaultPlanId: string): Decision {
+// Which plan's start_date is closest (either direction) to this payment's
+// own date — not just "the current plan," which is what this defaulted to
+// before and silently misattributed a payment from a prior year onto this
+// year's plan (confirmed live: a payment dated mid-August landed on the
+// plan that started that same month a year later, since it was simply
+// first in the list). Comparing by nearest start_date rather than requiring
+// the date to fall strictly within [start_date, end_date] because this
+// school's own payment dates routinely land a week or two before the plan's
+// recorded start_date (first-of-month billing vs. a semester's formal
+// start) — a strict range check would fail to match the correct plan too.
+function bestPlanIdForDate(dateStr: string | null, plans: Plan[]): string {
+  if (!plans.length) return ''
+  if (!dateStr) return plans[0].id
+  const targetMs = new Date(`${dateStr}T00:00:00`).getTime()
+  let best = plans[0]
+  let bestDiff = Infinity
+  for (const p of plans) {
+    if (!p.start_date) continue
+    const diff = Math.abs(new Date(`${p.start_date}T00:00:00`).getTime() - targetMs)
+    if (diff < bestDiff) { bestDiff = diff; best = p }
+  }
+  return best.id
+}
+
+function defaultDecision(p: PendingSolaPayment, plans: Plan[]): Decision {
   return {
     kind: p.charge_kind === 'ambiguous' ? null : p.charge_kind,
     feeType: (p.suggested_fee_type as FeeType) ?? 'tuition',
-    planId: defaultPlanId,
+    planId: bestPlanIdForDate(p.transaction_date, plans),
     category: (p.suggested_donation_category as DonationCategory) ?? 'one_time',
     eventId: '',
     // Defaults on when this payment came from a real recurring schedule —
@@ -63,7 +87,6 @@ export default function IncomingSolaPayments({ payments, type, plans, events, on
   events?: EventOption[]
   onResolved: () => void
 }) {
-  const defaultPlanId = plans?.[0]?.id ?? ''
   const [decisions, setDecisions] = useState<Record<string, Decision>>({})
   const [busyId, setBusyId] = useState<string | null>(null)
   const [result, setResult] = useState<Record<string, { type: 'error'; msg: string }>>({})
@@ -72,7 +95,7 @@ export default function IncomingSolaPayments({ payments, type, plans, events, on
   const total = payments.reduce((s, p) => s + Number(p.amount ?? 0), 0)
 
   function getDecision(p: PendingSolaPayment): Decision {
-    return decisions[p.id] ?? defaultDecision(p, defaultPlanId)
+    return decisions[p.id] ?? defaultDecision(p, plans ?? [])
   }
   function setDecision(id: string, patch: Partial<Decision>, fallback: Decision) {
     setDecisions(d => ({ ...d, [id]: { ...(d[id] ?? fallback), ...patch } }))
