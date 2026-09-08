@@ -26,6 +26,10 @@ type MatchPreview =
   | { kind: 'merge'; existing: CandidatePayment }
   | { kind: 'needs_review'; existing: CandidatePayment; days: number }
   | { kind: 'new' }
+type CandidateDonation = { id: string; amount: number; donation_date: string }
+type DonationMatchPreview =
+  | { kind: 'needs_review'; existing: CandidateDonation }
+  | { kind: 'new' }
 
 type Decision = { kind: 'tuition' | 'donation' | null; feeType: FeeType; planId: string; category: DonationCategory; eventId: string; confirmSchedule: boolean }
 
@@ -130,6 +134,26 @@ function previewMessage(preview: MatchPreview): string {
   return 'No matching payment found on file — this will be recorded as a new charge.'
 }
 
+// Donation side of the same idea — mirrors the import route's donation
+// branch, which is deliberately simpler than tuition's: same amount in the
+// same calendar month always goes to needs_review, never auto-merges (a
+// donor giving twice in one month for different reasons is plausible
+// enough that this app never guesses "same" on its own — see the module
+// comment in app/api/sola/sync/import/route.ts). No day-window fuzzy match
+// either, just the calendar month.
+function previewDonationMatch(payment: PendingSolaPayment, candidates: CandidateDonation[]): DonationMatchPreview {
+  const monthKey = (d: string | null) => (d ? d.slice(0, 7) : null)
+  const match = candidates.find(c => Number(c.amount) === Number(payment.amount) && monthKey(c.donation_date) === monthKey(payment.transaction_date))
+  return match ? { kind: 'needs_review', existing: match } : { kind: 'new' }
+}
+
+function previewDonationMessage(preview: DonationMatchPreview): string {
+  if (preview.kind === 'needs_review') {
+    return `Looks like it might be the same as an existing ${formatCurrency(Number(preview.existing.amount))} donation on ${new Date(`${preview.existing.donation_date}T00:00:00`).toLocaleDateString()} — will be sent for manual review instead of importing automatically.`
+  }
+  return 'No matching donation found on file — this will be recorded as a new donation.'
+}
+
 // A Sola charge that's real (approved, actual money moved) but hasn't been
 // reviewed/imported into tuition_payments or donations yet — surfaced here so
 // staff see it on the family's own record right away instead of only in the
@@ -138,7 +162,7 @@ function previewMessage(preview: MatchPreview): string {
 // (already flagged as a possible duplicate against something else on file)
 // still route to Sola Sync, since resolving those needs to see the specific
 // payment they might duplicate, which this compact card has no room for.
-export default function IncomingSolaPayments({ payments, type, plans, events, tuitionCandidates, mergeWindowDays, onResolved }: {
+export default function IncomingSolaPayments({ payments, type, plans, events, tuitionCandidates, mergeWindowDays, donationCandidates, onResolved }: {
   payments: PendingSolaPayment[]
   type: 'student' | 'donor'
   plans?: Plan[]
@@ -148,6 +172,9 @@ export default function IncomingSolaPayments({ payments, type, plans, events, tu
   // hide the preview line entirely (falls back to the plain Import button).
   tuitionCandidates?: CandidatePayment[]
   mergeWindowDays?: number
+  // Same idea for donations — existing donations not already tied to a
+  // Sola transaction. Omit to hide that preview line.
+  donationCandidates?: CandidateDonation[]
   onResolved: () => void
 }) {
   const [decisions, setDecisions] = useState<Record<string, Decision>>({})
@@ -170,6 +197,10 @@ export default function IncomingSolaPayments({ payments, type, plans, events, tu
     if (d.kind === 'tuition' && tuitionCandidates) {
       const preview = previewMatch(p, d.feeType, d.planId, tuitionCandidates, mergeWindowDays ?? 30)
       if (!confirm(`${previewMessage(preview)}\n\nImport this payment?`)) return
+    }
+    if (d.kind === 'donation' && donationCandidates) {
+      const preview = previewDonationMatch(p, donationCandidates)
+      if (!confirm(`${previewDonationMessage(preview)}\n\nImport this donation?`)) return
     }
     setBusyId(p.id)
     setResult(r => ({ ...r, [p.id]: undefined as unknown as { type: 'error'; msg: string } }))
@@ -309,6 +340,11 @@ export default function IncomingSolaPayments({ payments, type, plans, events, tu
                     const preview = previewMatch(p, d.feeType, d.planId, tuitionCandidates, mergeWindowDays ?? 30)
                     const style = preview.kind === 'merge' ? 'text-green-700' : preview.kind === 'needs_review' ? 'text-amber-800 font-medium' : 'text-slate-500'
                     return <p className={`w-full pt-0.5 ${style}`}>{previewMessage(preview)}</p>
+                  })()}
+                  {d.kind === 'donation' && donationCandidates && (() => {
+                    const preview = previewDonationMatch(p, donationCandidates)
+                    const style = preview.kind === 'needs_review' ? 'text-amber-800 font-medium' : 'text-slate-500'
+                    return <p className={`w-full pt-0.5 ${style}`}>{previewDonationMessage(preview)}</p>
                   })()}
                 </div>
               ) : (

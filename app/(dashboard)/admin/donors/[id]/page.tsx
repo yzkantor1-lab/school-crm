@@ -38,6 +38,7 @@ type Donation = {
   purpose: string; notes: string | null; archived: boolean
   category: string | null; event_id: string | null; source: string
   events: { name: string } | null
+  sola_transaction_id: string | null
 }
 type LinkedStudent = { id: string; first_name: string; last_name: string }
 type EventOption = { id: string; name: string }
@@ -486,6 +487,9 @@ export default function DonorDetailPage() {
         payments={pendingSolaPayments}
         type="donor"
         events={events}
+        donationCandidates={donations
+          .filter(d => !d.sola_transaction_id)
+          .map(d => ({ id: d.id, amount: Number(d.amount), donation_date: d.donation_date }))}
         onResolved={() => { fetchPendingSolaPayments(); fetchData() }}
       />
 
