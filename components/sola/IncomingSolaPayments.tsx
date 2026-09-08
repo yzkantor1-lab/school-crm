@@ -21,6 +21,11 @@ type FeeType = 'tuition' | 'building_fund' | 'registration_fee'
 type DonationCategory = 'monthly_recurring' | 'one_time' | 'event'
 type Plan = { id: string; academic_year: string | null; start_date: string | null }
 type EventOption = { id: string; name: string }
+type CandidatePayment = { id: string; amount: number; payment_date: string | null; payment_type: string | null; tuition_plan_id: string | null }
+type MatchPreview =
+  | { kind: 'merge'; existing: CandidatePayment }
+  | { kind: 'needs_review'; existing: CandidatePayment; days: number }
+  | { kind: 'new' }
 
 type Decision = { kind: 'tuition' | 'donation' | null; feeType: FeeType; planId: string; category: DonationCategory; eventId: string; confirmSchedule: boolean }
 
@@ -72,6 +77,59 @@ function defaultDecision(p: PendingSolaPayment, plans: Plan[]): Decision {
   }
 }
 
+// Previews what Import will actually do, before staff commit to it — mirrors
+// (deliberately kept in sync with, not shared code with, since one runs in
+// the browser and one on the server) the matching logic in
+// app/api/sola/sync/import/route.ts: same fee type/plan/amount in the same
+// calendar month auto-merges into the existing payment instead of creating
+// a duplicate; same fee type/plan/amount within the configured merge window
+// but a different month gets flagged for manual review instead of guessed
+// either way; anything else is a genuinely new payment. This is what
+// resolved the actual incident that prompted this — two families each had
+// a Sola-sourced payment silently duplicate an already-recorded one because
+// the plan picker defaulted to the wrong year, invisibly until reviewed
+// after the fact. Simplification vs. the server: doesn't model a
+// batch-import splicing multiple candidates against each other (this
+// previews one row in isolation), and doesn't know about a confirmed
+// schedule's date-check bypass — worst case that makes this slightly more
+// cautious than the real outcome for that one case, never less.
+function previewMatch(
+  payment: PendingSolaPayment, feeType: FeeType, planId: string,
+  candidates: CandidatePayment[], mergeWindowDays: number
+): MatchPreview {
+  const isRegFee = feeType === 'registration_fee'
+  const monthKey = (d: string | null) => (d ? d.slice(0, 7) : null)
+  const sameTypeAmount = candidates.filter(c =>
+    c.payment_type === feeType &&
+    (isRegFee ? c.tuition_plan_id == null : c.tuition_plan_id === planId) &&
+    Number(c.amount) === Number(payment.amount)
+  )
+  const exact = sameTypeAmount.find(c => monthKey(c.payment_date) === monthKey(payment.transaction_date))
+  if (exact) return { kind: 'merge', existing: exact }
+
+  if (payment.transaction_date) {
+    let best: CandidatePayment | null = null
+    let bestDiff = Infinity
+    for (const c of sameTypeAmount) {
+      if (!c.payment_date) continue
+      const diff = Math.abs((new Date(`${c.payment_date}T00:00:00`).getTime() - new Date(`${payment.transaction_date}T00:00:00`).getTime()) / 86400000)
+      if (diff <= mergeWindowDays && diff < bestDiff) { bestDiff = diff; best = c }
+    }
+    if (best) return { kind: 'needs_review', existing: best, days: bestDiff }
+  }
+  return { kind: 'new' }
+}
+
+function previewMessage(preview: MatchPreview): string {
+  if (preview.kind === 'merge') {
+    return `Matches your existing ${formatCurrency(Number(preview.existing.amount))} payment from ${new Date(`${preview.existing.payment_date}T00:00:00`).toLocaleDateString()} — will attach to it, not create a new payment.`
+  }
+  if (preview.kind === 'needs_review') {
+    return `Might be the same as your existing ${formatCurrency(Number(preview.existing.amount))} payment from ${new Date(`${preview.existing.payment_date}T00:00:00`).toLocaleDateString()} (${Math.round(preview.days)} day${Math.round(preview.days) === 1 ? '' : 's'} off) — will be sent for manual review instead of importing automatically.`
+  }
+  return 'No matching payment found on file — this will be recorded as a new charge.'
+}
+
 // A Sola charge that's real (approved, actual money moved) but hasn't been
 // reviewed/imported into tuition_payments or donations yet — surfaced here so
 // staff see it on the family's own record right away instead of only in the
@@ -80,11 +138,16 @@ function defaultDecision(p: PendingSolaPayment, plans: Plan[]): Decision {
 // (already flagged as a possible duplicate against something else on file)
 // still route to Sola Sync, since resolving those needs to see the specific
 // payment they might duplicate, which this compact card has no room for.
-export default function IncomingSolaPayments({ payments, type, plans, events, onResolved }: {
+export default function IncomingSolaPayments({ payments, type, plans, events, tuitionCandidates, mergeWindowDays, onResolved }: {
   payments: PendingSolaPayment[]
   type: 'student' | 'donor'
   plans?: Plan[]
   events?: EventOption[]
+  // Existing tuition_payments not already tied to a Sola transaction —
+  // the candidate pool the live match preview checks against. Omit to
+  // hide the preview line entirely (falls back to the plain Import button).
+  tuitionCandidates?: CandidatePayment[]
+  mergeWindowDays?: number
   onResolved: () => void
 }) {
   const [decisions, setDecisions] = useState<Record<string, Decision>>({})
@@ -104,6 +167,10 @@ export default function IncomingSolaPayments({ payments, type, plans, events, on
   async function importOne(p: PendingSolaPayment) {
     const d = getDecision(p)
     if (!d.kind) return
+    if (d.kind === 'tuition' && tuitionCandidates) {
+      const preview = previewMatch(p, d.feeType, d.planId, tuitionCandidates, mergeWindowDays ?? 30)
+      if (!confirm(`${previewMessage(preview)}\n\nImport this payment?`)) return
+    }
     setBusyId(p.id)
     setResult(r => ({ ...r, [p.id]: undefined as unknown as { type: 'error'; msg: string } }))
     try {
@@ -238,6 +305,11 @@ export default function IncomingSolaPayments({ payments, type, plans, events, on
                       Also apply to all future payments on this schedule — skip review next time
                     </label>
                   )}
+                  {d.kind === 'tuition' && tuitionCandidates && (d.feeType === 'registration_fee' || d.planId) && (() => {
+                    const preview = previewMatch(p, d.feeType, d.planId, tuitionCandidates, mergeWindowDays ?? 30)
+                    const style = preview.kind === 'merge' ? 'text-green-700' : preview.kind === 'needs_review' ? 'text-amber-800 font-medium' : 'text-slate-500'
+                    return <p className={`w-full pt-0.5 ${style}`}>{previewMessage(preview)}</p>
+                  })()}
                 </div>
               ) : (
                 <p className="text-amber-600 text-[11px]">Possible duplicate flagged — resolve on the Sola Sync page.</p>

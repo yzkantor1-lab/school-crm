@@ -94,6 +94,7 @@ type TuitionPayment = {
   // months are already covered, independent of when the payment was made.
   period_month: string | null
   created_at: string
+  sola_transaction_id: string | null
 }
 
 // A Sola recurring schedule — covers Phone Charge (know whether a
@@ -894,6 +895,7 @@ export default function StudentTuitionPage() {
   const [parentDonations, setParentDonations] = useState<ParentDonation[]>([])
   const [pendingSolaPayments, setPendingSolaPayments] = useState<PendingSolaPayment[]>([])
   const [taxId, setTaxId] = useState('')
+  const [mergeWindowDays, setMergeWindowDays] = useState(30)
   const [recalcTarget, setRecalcTarget] = useState<{
     purpose: 'tuition' | 'building_fund' | 'phone_charge'; purposeLabel: string; schedule: PaymentSchedule
     remainingBalance: number; yearEndDate: string | null
@@ -932,6 +934,11 @@ export default function StudentTuitionPage() {
         supabase.from('site_settings').select('value').eq('key', 'tax_id').maybeSingle(),
       ])
       setTaxId(taxIdRow?.value ?? '')
+      // Best-effort — only used to size the Incoming-Sola match preview
+      // window, so a failure here shouldn't affect anything else on the page.
+      fetch('/api/sola-settings').then(r => r.json()).then(j => {
+        if (typeof j?.tuitionMergeWindowDays === 'number') setMergeWindowDays(j.tuitionMergeWindowDays)
+      }).catch(() => {})
       const warnings: string[] = []
       if (sErr) warnings.push(`Student record (incl. tuition payments): ${sErr.message}`)
       if (pErr) warnings.push(`Tuition plans: ${pErr.message}`)
@@ -1636,6 +1643,10 @@ export default function StudentTuitionPage() {
         payments={pendingSolaPayments}
         type="student"
         plans={plansForSolaReview}
+        tuitionCandidates={payments
+          .filter(p => !p.sola_transaction_id)
+          .map(p => ({ id: p.id, amount: Number(p.amount), payment_date: p.payment_date, payment_type: p.payment_type, tuition_plan_id: p.tuition_plan_id }))}
+        mergeWindowDays={mergeWindowDays}
         onResolved={() => { loadPendingSolaPayments(); load() }}
       />
 
