@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { Clock, HelpCircle, Loader2, AlertCircle } from 'lucide-react'
 import { formatCurrency } from '@/lib/currency'
@@ -22,16 +22,28 @@ type DonationCategory = 'monthly_recurring' | 'one_time' | 'event'
 type Plan = { id: string; academic_year: string | null; start_date: string | null }
 type EventOption = { id: string; name: string }
 type CandidatePayment = { id: string; amount: number; payment_date: string | null; payment_type: string | null; tuition_plan_id: string | null }
-type MatchPreview =
-  | { kind: 'merge'; existing: CandidatePayment }
-  | { kind: 'needs_review'; existing: CandidatePayment; days: number }
-  | { kind: 'new' }
+type TuitionMatch = { candidate: CandidatePayment; days: number; sameMonth: boolean }
 type CandidateDonation = { id: string; amount: number; donation_date: string }
-type DonationMatchPreview =
-  | { kind: 'needs_review'; existing: CandidateDonation }
-  | { kind: 'new' }
+type DonationMatch = { candidate: CandidateDonation }
 
-type Decision = { kind: 'tuition' | 'donation' | null; feeType: FeeType; planId: string; category: DonationCategory; eventId: string; confirmSchedule: boolean }
+// 'new' means "this is a separate payment, don't match it to anything" —
+// an explicit choice, not just the absence of one — otherwise a match
+// candidate's id.
+type Decision = {
+  kind: 'tuition' | 'donation' | null; feeType: FeeType; planId: string; category: DonationCategory; eventId: string
+  confirmSchedule: boolean; matchChoice: string
+}
+
+// A labeled field for the review controls — plain unlabeled selects
+// crammed into one row were reportedly confusing to tell apart at a glance.
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] font-medium text-amber-700 uppercase tracking-wide">{label}</span>
+      {children}
+    </div>
+  )
+}
 
 function kindLabel(p: PendingSolaPayment) {
   if (p.charge_kind === 'ambiguous') return 'not sure yet'
@@ -67,6 +79,60 @@ function bestPlanIdForDate(dateStr: string | null, plans: Plan[]): string {
   return best.id
 }
 
+// Every existing payment that could plausibly be this same charge — same
+// fee type/plan/amount, within the configured merge window — not just the
+// single closest one, so staff can see and pick from real options instead
+// of a single auto-guess they can only accept or reject. Mirrors (kept in
+// sync with by hand, not shared code, since one runs in the browser and one
+// on the server) the matching logic in app/api/sola/sync/import/route.ts.
+// Sorted closest-first; a same-calendar-month match is flagged sameMonth
+// since that's what the server auto-merges on when no explicit choice is
+// sent. This is what resolved the actual incident that prompted this whole
+// preview feature — two families each had a Sola-sourced payment silently
+// duplicate an already-recorded one because the plan picker defaulted to
+// the wrong year, invisibly until reviewed after the fact.
+function findTuitionMatches(
+  payment: PendingSolaPayment, feeType: FeeType, planId: string,
+  candidates: CandidatePayment[], mergeWindowDays: number
+): TuitionMatch[] {
+  const isRegFee = feeType === 'registration_fee'
+  const monthKey = (d: string | null) => (d ? d.slice(0, 7) : null)
+  if (!payment.transaction_date) return []
+  const matches: TuitionMatch[] = []
+  for (const c of candidates) {
+    if (c.payment_type !== feeType) continue
+    if (isRegFee ? c.tuition_plan_id != null : c.tuition_plan_id !== planId) continue
+    if (Number(c.amount) !== Number(payment.amount)) continue
+    if (!c.payment_date) continue
+    const sameMonth = monthKey(c.payment_date) === monthKey(payment.transaction_date)
+    const days = Math.abs((new Date(`${c.payment_date}T00:00:00`).getTime() - new Date(`${payment.transaction_date}T00:00:00`).getTime()) / 86400000)
+    if (sameMonth || days <= mergeWindowDays) matches.push({ candidate: c, days, sameMonth })
+  }
+  return matches.sort((a, b) => a.days - b.days)
+}
+
+function tuitionMatchLabel(m: TuitionMatch): string {
+  const date = new Date(`${m.candidate.payment_date}T00:00:00`).toLocaleDateString()
+  return `Same as ${formatCurrency(Number(m.candidate.amount))} on ${date}${m.sameMonth ? '' : ` (${Math.round(m.days)}d off)`}`
+}
+
+// Donation side — mirrors the import route's donation branch, deliberately
+// simpler than tuition's: only a same-amount/same-calendar-month match
+// counts at all (no day-window fuzzy match), and it's never auto-merged —
+// always routed to manual review even when chosen explicitly here, since a
+// donor giving twice in one month for different reasons is plausible
+// enough that this app never silently treats two donations as the same one.
+function findDonationMatches(payment: PendingSolaPayment, candidates: CandidateDonation[]): DonationMatch[] {
+  const monthKey = (d: string | null) => (d ? d.slice(0, 7) : null)
+  return candidates
+    .filter(c => Number(c.amount) === Number(payment.amount) && monthKey(c.donation_date) === monthKey(payment.transaction_date))
+    .map(c => ({ candidate: c }))
+}
+
+function donationMatchLabel(m: DonationMatch): string {
+  return `Same as ${formatCurrency(Number(m.candidate.amount))} on ${new Date(`${m.candidate.donation_date}T00:00:00`).toLocaleDateString()}`
+}
+
 function defaultDecision(p: PendingSolaPayment, plans: Plan[]): Decision {
   return {
     kind: p.charge_kind === 'ambiguous' ? null : p.charge_kind,
@@ -78,80 +144,19 @@ function defaultDecision(p: PendingSolaPayment, plans: Plan[]): Decision {
     // that's almost always what staff want (stop re-reviewing every month),
     // and it's a single checkbox to turn off for the rare exception.
     confirmSchedule: !!p.sola_sync_schedule_id,
+    // '' = not yet touched by staff — the dropdown shows/uses the closest
+    // match as a default (see effectiveMatchChoice) without that default
+    // being "sticky" as an actual explicit choice until they interact with it.
+    matchChoice: '',
   }
 }
 
-// Previews what Import will actually do, before staff commit to it — mirrors
-// (deliberately kept in sync with, not shared code with, since one runs in
-// the browser and one on the server) the matching logic in
-// app/api/sola/sync/import/route.ts: same fee type/plan/amount in the same
-// calendar month auto-merges into the existing payment instead of creating
-// a duplicate; same fee type/plan/amount within the configured merge window
-// but a different month gets flagged for manual review instead of guessed
-// either way; anything else is a genuinely new payment. This is what
-// resolved the actual incident that prompted this — two families each had
-// a Sola-sourced payment silently duplicate an already-recorded one because
-// the plan picker defaulted to the wrong year, invisibly until reviewed
-// after the fact. Simplification vs. the server: doesn't model a
-// batch-import splicing multiple candidates against each other (this
-// previews one row in isolation), and doesn't know about a confirmed
-// schedule's date-check bypass — worst case that makes this slightly more
-// cautious than the real outcome for that one case, never less.
-function previewMatch(
-  payment: PendingSolaPayment, feeType: FeeType, planId: string,
-  candidates: CandidatePayment[], mergeWindowDays: number
-): MatchPreview {
-  const isRegFee = feeType === 'registration_fee'
-  const monthKey = (d: string | null) => (d ? d.slice(0, 7) : null)
-  const sameTypeAmount = candidates.filter(c =>
-    c.payment_type === feeType &&
-    (isRegFee ? c.tuition_plan_id == null : c.tuition_plan_id === planId) &&
-    Number(c.amount) === Number(payment.amount)
-  )
-  const exact = sameTypeAmount.find(c => monthKey(c.payment_date) === monthKey(payment.transaction_date))
-  if (exact) return { kind: 'merge', existing: exact }
-
-  if (payment.transaction_date) {
-    let best: CandidatePayment | null = null
-    let bestDiff = Infinity
-    for (const c of sameTypeAmount) {
-      if (!c.payment_date) continue
-      const diff = Math.abs((new Date(`${c.payment_date}T00:00:00`).getTime() - new Date(`${payment.transaction_date}T00:00:00`).getTime()) / 86400000)
-      if (diff <= mergeWindowDays && diff < bestDiff) { bestDiff = diff; best = c }
-    }
-    if (best) return { kind: 'needs_review', existing: best, days: bestDiff }
-  }
-  return { kind: 'new' }
-}
-
-function previewMessage(preview: MatchPreview): string {
-  if (preview.kind === 'merge') {
-    return `Matches your existing ${formatCurrency(Number(preview.existing.amount))} payment from ${new Date(`${preview.existing.payment_date}T00:00:00`).toLocaleDateString()} — will attach to it, not create a new payment.`
-  }
-  if (preview.kind === 'needs_review') {
-    return `Might be the same as your existing ${formatCurrency(Number(preview.existing.amount))} payment from ${new Date(`${preview.existing.payment_date}T00:00:00`).toLocaleDateString()} (${Math.round(preview.days)} day${Math.round(preview.days) === 1 ? '' : 's'} off) — will be sent for manual review instead of importing automatically.`
-  }
-  return 'No matching payment found on file — this will be recorded as a new charge.'
-}
-
-// Donation side of the same idea — mirrors the import route's donation
-// branch, which is deliberately simpler than tuition's: same amount in the
-// same calendar month always goes to needs_review, never auto-merges (a
-// donor giving twice in one month for different reasons is plausible
-// enough that this app never guesses "same" on its own — see the module
-// comment in app/api/sola/sync/import/route.ts). No day-window fuzzy match
-// either, just the calendar month.
-function previewDonationMatch(payment: PendingSolaPayment, candidates: CandidateDonation[]): DonationMatchPreview {
-  const monthKey = (d: string | null) => (d ? d.slice(0, 7) : null)
-  const match = candidates.find(c => Number(c.amount) === Number(payment.amount) && monthKey(c.donation_date) === monthKey(payment.transaction_date))
-  return match ? { kind: 'needs_review', existing: match } : { kind: 'new' }
-}
-
-function previewDonationMessage(preview: DonationMatchPreview): string {
-  if (preview.kind === 'needs_review') {
-    return `Looks like it might be the same as an existing ${formatCurrency(Number(preview.existing.amount))} donation on ${new Date(`${preview.existing.donation_date}T00:00:00`).toLocaleDateString()} — will be sent for manual review instead of importing automatically.`
-  }
-  return 'No matching donation found on file — this will be recorded as a new donation.'
+// The dropdown's actual value: whatever staff explicitly picked, or — if
+// they haven't touched it — the closest match as a sensible default (or
+// 'new' if there isn't one). Kept separate from the stored decision so an
+// auto-picked default doesn't masquerade as a deliberate choice in the UI.
+function effectiveMatchChoice(matchChoice: string, matches: { candidate: { id: string } }[]): string {
+  return matchChoice || matches[0]?.candidate.id || 'new'
 }
 
 // A Sola charge that's real (approved, actual money moved) but hasn't been
@@ -194,20 +199,25 @@ export default function IncomingSolaPayments({ payments, type, plans, events, tu
   async function importOne(p: PendingSolaPayment) {
     const d = getDecision(p)
     if (!d.kind) return
+
+    let matchChoice = ''
     if (d.kind === 'tuition' && tuitionCandidates) {
-      const preview = previewMatch(p, d.feeType, d.planId, tuitionCandidates, mergeWindowDays ?? 30)
-      if (!confirm(`${previewMessage(preview)}\n\nImport this payment?`)) return
+      const matches = findTuitionMatches(p, d.feeType, d.planId, tuitionCandidates, mergeWindowDays ?? 30)
+      matchChoice = effectiveMatchChoice(d.matchChoice, matches)
+    } else if (d.kind === 'donation' && donationCandidates) {
+      const matches = findDonationMatches(p, donationCandidates)
+      matchChoice = effectiveMatchChoice(d.matchChoice, matches)
     }
-    if (d.kind === 'donation' && donationCandidates) {
-      const preview = previewDonationMatch(p, donationCandidates)
-      if (!confirm(`${previewDonationMessage(preview)}\n\nImport this donation?`)) return
-    }
+
     setBusyId(p.id)
     setResult(r => ({ ...r, [p.id]: undefined as unknown as { type: 'error'; msg: string } }))
     try {
+      const matchFields = matchChoice === 'new' ? { forceNew: true }
+        : matchChoice ? (d.kind === 'tuition' ? { matchedTuitionPaymentId: matchChoice } : { matchedDonationId: matchChoice })
+        : {}
       const decisionPayload = d.kind === 'tuition'
-        ? { syncPaymentId: p.id, kind: 'tuition', feeType: d.feeType, tuitionPlanId: d.feeType === 'registration_fee' ? null : (d.planId || null) }
-        : { syncPaymentId: p.id, kind: 'donation', category: d.category, eventId: d.category === 'event' ? (d.eventId || null) : null }
+        ? { syncPaymentId: p.id, kind: 'tuition', feeType: d.feeType, tuitionPlanId: d.feeType === 'registration_fee' ? null : (d.planId || null), ...matchFields }
+        : { syncPaymentId: p.id, kind: 'donation', category: d.category, eventId: d.category === 'event' ? (d.eventId || null) : null, ...matchFields }
       const res = await fetch('/api/sola/sync/import', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ syncCustomerId: p.sola_sync_customer_id, decisions: [decisionPayload] }),
@@ -278,74 +288,109 @@ export default function IncomingSolaPayments({ payments, type, plans, events, tu
               </div>
 
               {canReview ? (
-                <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-amber-100">
-                  <select disabled={busy} value={d.kind ?? ''} onChange={e => setDecision(p.id, { kind: (e.target.value || null) as Decision['kind'] }, d)}
-                    className="border border-amber-200 rounded px-1.5 py-0.5 text-xs bg-white disabled:opacity-50">
-                    <option value="">— kind —</option>
-                    <option value="tuition">Tuition</option>
-                    <option value="donation">Donation</option>
-                  </select>
-                  {d.kind === 'tuition' && (
-                    <>
-                      <select disabled={busy} value={d.feeType} onChange={e => setDecision(p.id, { feeType: e.target.value as FeeType }, d)}
-                        className="border border-amber-200 rounded px-1.5 py-0.5 text-xs bg-white disabled:opacity-50">
+                <div className="pt-1.5 border-t border-amber-100 space-y-2">
+                  <div className="flex items-end gap-2.5 flex-wrap">
+                    <Field label="Kind">
+                      <select disabled={busy} value={d.kind ?? ''} onChange={e => setDecision(p.id, { kind: (e.target.value || null) as Decision['kind'] }, d)}
+                        className="border border-amber-200 rounded px-1.5 py-1 text-xs bg-white disabled:opacity-50">
+                        <option value="">— choose —</option>
                         <option value="tuition">Tuition</option>
-                        <option value="building_fund">Building Fund</option>
-                        <option value="registration_fee">Registration Fee</option>
+                        <option value="donation">Donation</option>
                       </select>
-                      {d.feeType !== 'registration_fee' && (
-                        (plans?.length ?? 0) > 0 ? (
-                          <select disabled={busy} value={d.planId} onChange={e => setDecision(p.id, { planId: e.target.value }, d)}
-                            className="border border-amber-200 rounded px-1.5 py-0.5 text-xs bg-white disabled:opacity-50 max-w-[7rem]">
-                            {plans!.map(pl => <option key={pl.id} value={pl.id}>{pl.academic_year || 'Plan'}</option>)}
+                    </Field>
+                    {d.kind === 'tuition' && (
+                      <>
+                        <Field label="Fee type">
+                          <select disabled={busy} value={d.feeType} onChange={e => setDecision(p.id, { feeType: e.target.value as FeeType, matchChoice: '' }, d)}
+                            className="border border-amber-200 rounded px-1.5 py-1 text-xs bg-white disabled:opacity-50">
+                            <option value="tuition">Tuition</option>
+                            <option value="building_fund">Building Fund</option>
+                            <option value="registration_fee">Registration Fee</option>
                           </select>
-                        ) : <span className="text-red-500">no plan on file</span>
-                      )}
-                    </>
-                  )}
-                  {d.kind === 'donation' && (
-                    <>
-                      <select disabled={busy} value={d.category} onChange={e => setDecision(p.id, { category: e.target.value as DonationCategory }, d)}
-                        className="border border-amber-200 rounded px-1.5 py-0.5 text-xs bg-white disabled:opacity-50">
-                        <option value="one_time">One-Time</option>
-                        <option value="monthly_recurring">Monthly Recurring</option>
-                        <option value="event">Event</option>
-                      </select>
-                      {d.category === 'event' && (
-                        (events?.length ?? 0) > 0 ? (
-                          <select disabled={busy} value={d.eventId} onChange={e => setDecision(p.id, { eventId: e.target.value }, d)}
-                            className="border border-amber-200 rounded px-1.5 py-0.5 text-xs bg-white disabled:opacity-50 max-w-[7rem]">
-                            <option value="">— event —</option>
-                            {events!.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+                        </Field>
+                        {d.feeType !== 'registration_fee' && (
+                          (plans?.length ?? 0) > 0 ? (
+                            <Field label="Plan / year">
+                              <select disabled={busy} value={d.planId} onChange={e => setDecision(p.id, { planId: e.target.value, matchChoice: '' }, d)}
+                                className="border border-amber-200 rounded px-1.5 py-1 text-xs bg-white disabled:opacity-50 max-w-[7.5rem]">
+                                {plans!.map(pl => <option key={pl.id} value={pl.id}>{pl.academic_year || 'Plan'}</option>)}
+                              </select>
+                            </Field>
+                          ) : <span className="text-red-500 pb-1">no plan on file</span>
+                        )}
+                      </>
+                    )}
+                    {d.kind === 'donation' && (
+                      <>
+                        <Field label="Category">
+                          <select disabled={busy} value={d.category} onChange={e => setDecision(p.id, { category: e.target.value as DonationCategory }, d)}
+                            className="border border-amber-200 rounded px-1.5 py-1 text-xs bg-white disabled:opacity-50">
+                            <option value="one_time">One-Time</option>
+                            <option value="monthly_recurring">Monthly Recurring</option>
+                            <option value="event">Event</option>
                           </select>
-                        ) : <span className="text-red-500">no events</span>
-                      )}
-                    </>
-                  )}
-                  <button
-                    disabled={busy || !d.kind || (d.kind === 'tuition' && d.feeType !== 'registration_fee' && !d.planId)}
-                    onClick={() => importOne(p)}
-                    className="ml-auto flex items-center gap-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded-lg text-xs font-medium transition-colors"
-                  >
-                    {busy && <Loader2 size={11} className="animate-spin" />} Import
-                  </button>
+                        </Field>
+                        {d.category === 'event' && (
+                          (events?.length ?? 0) > 0 ? (
+                            <Field label="Event">
+                              <select disabled={busy} value={d.eventId} onChange={e => setDecision(p.id, { eventId: e.target.value }, d)}
+                                className="border border-amber-200 rounded px-1.5 py-1 text-xs bg-white disabled:opacity-50 max-w-[7.5rem]">
+                                <option value="">— event —</option>
+                                {events!.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+                              </select>
+                            </Field>
+                          ) : <span className="text-red-500 pb-1">no events</span>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {d.kind === 'tuition' && tuitionCandidates && (d.feeType === 'registration_fee' || d.planId) && (() => {
+                    const matches = findTuitionMatches(p, d.feeType, d.planId, tuitionCandidates, mergeWindowDays ?? 30)
+                    const choice = effectiveMatchChoice(d.matchChoice, matches)
+                    return (
+                      <Field label="Match this up with">
+                        <select disabled={busy} value={choice} onChange={e => setDecision(p.id, { matchChoice: e.target.value }, d)}
+                          className="border border-amber-200 rounded px-1.5 py-1 text-xs bg-white disabled:opacity-50 w-full max-w-xs">
+                          <option value="new">This is a new, separate payment</option>
+                          {matches.map(m => (
+                            <option key={m.candidate.id} value={m.candidate.id}>{tuitionMatchLabel(m)}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    )
+                  })()}
+                  {d.kind === 'donation' && donationCandidates && (() => {
+                    const matches = findDonationMatches(p, donationCandidates)
+                    const choice = effectiveMatchChoice(d.matchChoice, matches)
+                    return (
+                      <Field label="Match this up with">
+                        <select disabled={busy} value={choice} onChange={e => setDecision(p.id, { matchChoice: e.target.value }, d)}
+                          className="border border-amber-200 rounded px-1.5 py-1 text-xs bg-white disabled:opacity-50 w-full max-w-xs">
+                          <option value="new">This is a new, separate donation</option>
+                          {matches.map(m => (
+                            <option key={m.candidate.id} value={m.candidate.id}>{donationMatchLabel(m)}</option>
+                          ))}
+                        </select>
+                      </Field>
+                    )
+                  })()}
+
                   {p.sola_sync_schedule_id && d.kind && (
-                    <label className="flex items-center gap-1.5 text-amber-700 w-full pt-0.5">
+                    <label className="flex items-center gap-1.5 text-amber-700">
                       <input type="checkbox" checked={d.confirmSchedule} disabled={busy}
                         onChange={e => setDecision(p.id, { confirmSchedule: e.target.checked }, d)} />
                       Also apply to all future payments on this schedule — skip review next time
                     </label>
                   )}
-                  {d.kind === 'tuition' && tuitionCandidates && (d.feeType === 'registration_fee' || d.planId) && (() => {
-                    const preview = previewMatch(p, d.feeType, d.planId, tuitionCandidates, mergeWindowDays ?? 30)
-                    const style = preview.kind === 'merge' ? 'text-green-700' : preview.kind === 'needs_review' ? 'text-amber-800 font-medium' : 'text-slate-500'
-                    return <p className={`w-full pt-0.5 ${style}`}>{previewMessage(preview)}</p>
-                  })()}
-                  {d.kind === 'donation' && donationCandidates && (() => {
-                    const preview = previewDonationMatch(p, donationCandidates)
-                    const style = preview.kind === 'needs_review' ? 'text-amber-800 font-medium' : 'text-slate-500'
-                    return <p className={`w-full pt-0.5 ${style}`}>{previewDonationMessage(preview)}</p>
-                  })()}
+
+                  <button
+                    disabled={busy || !d.kind || (d.kind === 'tuition' && d.feeType !== 'registration_fee' && !d.planId)}
+                    onClick={() => importOne(p)}
+                    className="flex items-center gap-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                  >
+                    {busy && <Loader2 size={11} className="animate-spin" />} Import
+                  </button>
                 </div>
               ) : (
                 <p className="text-amber-600 text-[11px]">Possible duplicate flagged — resolve on the Sola Sync page.</p>

@@ -10,6 +10,17 @@ type Decision = {
   // donation
   category?: 'monthly_recurring' | 'one_time' | 'event'
   eventId?: string | null
+  // An explicit staff choice from the inline match dropdown — when set,
+  // this skips the auto fuzzy/nearby matching below entirely and does
+  // exactly what was picked: attach to that specific existing payment/
+  // donation (matchedTuitionPaymentId/matchedDonationId), or record as a
+  // genuinely new one regardless of what auto-matching would have guessed
+  // (forceNew). Omit both to fall back to the automatic behavior, used by
+  // the Sola Sync page's own bulk-decision flow, which doesn't have this
+  // per-row picker.
+  matchedTuitionPaymentId?: string
+  matchedDonationId?: string
+  forceNew?: boolean
 }
 
 type Body = { syncCustomerId: string; decisions: Decision[] }
@@ -126,60 +137,81 @@ export async function POST(req: Request) {
         continue
       }
 
-      const fuzzyIdx = tuitionCandidatePool.findIndex(existing =>
-        existing.payment_type === decision.feeType &&
-        (isRegFee ? existing.tuition_plan_id == null : existing.tuition_plan_id === tuitionPlanId) &&
-        Number(existing.amount) === Number(payment.amount) &&
-        monthKey(existing.payment_date) === monthKey(payment.transaction_date)
-      )
-      if (fuzzyIdx !== -1) {
-        const existing = tuitionCandidatePool[fuzzyIdx]
-        tuitionCandidatePool.splice(fuzzyIdx, 1)
-        const looksLikeUnconsideredToday = existing.payment_date && existing.created_at && existing.payment_date === existing.created_at.slice(0, 10)
-        const dateUpdated = !!(looksLikeUnconsideredToday && payment.transaction_date && existing.payment_date !== payment.transaction_date)
+      // An explicit choice from the inline match dropdown takes precedence
+      // over anything below — staff already looked at the real candidates
+      // and picked exactly what this is, so there's nothing left to guess.
+      if (decision.matchedTuitionPaymentId) {
+        const idx = tuitionCandidatePool.findIndex(existing => existing.id === decision.matchedTuitionPaymentId)
+        if (idx === -1) {
+          results.push({ syncPaymentId: decision.syncPaymentId, status: 'failed', reason: 'That matching payment is no longer available — refresh and try again.' })
+          continue
+        }
+        const existing = tuitionCandidatePool[idx]
+        tuitionCandidatePool.splice(idx, 1)
         const patch: Record<string, unknown> = { sola_transaction_id: payment.sola_transaction_id }
-        if (dateUpdated) patch.payment_date = payment.transaction_date
+        if (payment.transaction_date && existing.payment_date !== payment.transaction_date) patch.payment_date = payment.transaction_date
         await supabase.from('tuition_payments').update(patch).eq('id', existing.id)
         await supabase.from('sola_sync_payments').update({ import_status: 'duplicate', charge_kind: 'tuition', tuition_payment_id: existing.id }).eq('id', payment.id)
-        results.push({
-          syncPaymentId: decision.syncPaymentId, status: 'merged',
-          reason: dateUpdated
-            ? `Matched an existing ${existing.payment_date} payment already on file — kept it as one payment and corrected its date to Sola's record (${payment.transaction_date}).`
-            : 'Matched an existing payment already on file for the same month — kept it as one payment, no duplicate created.',
-        })
+        results.push({ syncPaymentId: decision.syncPaymentId, status: 'merged', reason: 'Matched to the payment you selected — kept it as one payment, no duplicate created.' })
         continue
       }
 
-      // No same-month match — but if there's a same-amount/same-type payment
-      // nearby in time (within the configured window), don't silently assume
-      // it's unrelated either. Flag it for a human call instead of guessing
-      // either way. Closest by date wins if more than one candidate qualifies.
-      // Skipped entirely for a confirmed schedule — its identity already
-      // settles which family/plan this belongs to, no date guess needed.
-      if (payment.transaction_date && !isScheduleConfirmed) {
-        let nearbyIdx = -1
-        let nearbyDays = Infinity
-        tuitionCandidatePool.forEach((existing, idx) => {
-          if (existing.payment_type !== decision.feeType) return
-          if (isRegFee ? existing.tuition_plan_id != null : existing.tuition_plan_id !== tuitionPlanId) return
-          if (Number(existing.amount) !== Number(payment.amount)) return
-          if (!existing.payment_date) return
-          const diff = daysBetween(existing.payment_date, payment.transaction_date!)
-          if (diff <= mergeWindowDays && diff < nearbyDays) { nearbyDays = diff; nearbyIdx = idx }
-        })
-        if (nearbyIdx !== -1) {
-          const nearby = tuitionCandidatePool[nearbyIdx]
-          tuitionCandidatePool.splice(nearbyIdx, 1)
-          await supabase.from('sola_sync_payments').update({
-            import_status: 'needs_review', charge_kind: 'tuition',
-            duplicate_of_tuition_payment_id: nearby.id,
-            resolved_fee_type: decision.feeType, resolved_tuition_plan_id: isRegFee ? null : (tuitionPlanId ?? null),
-          }).eq('id', payment.id)
+      if (!decision.forceNew) {
+        const fuzzyIdx = tuitionCandidatePool.findIndex(existing =>
+          existing.payment_type === decision.feeType &&
+          (isRegFee ? existing.tuition_plan_id == null : existing.tuition_plan_id === tuitionPlanId) &&
+          Number(existing.amount) === Number(payment.amount) &&
+          monthKey(existing.payment_date) === monthKey(payment.transaction_date)
+        )
+        if (fuzzyIdx !== -1) {
+          const existing = tuitionCandidatePool[fuzzyIdx]
+          tuitionCandidatePool.splice(fuzzyIdx, 1)
+          const looksLikeUnconsideredToday = existing.payment_date && existing.created_at && existing.payment_date === existing.created_at.slice(0, 10)
+          const dateUpdated = !!(looksLikeUnconsideredToday && payment.transaction_date && existing.payment_date !== payment.transaction_date)
+          const patch: Record<string, unknown> = { sola_transaction_id: payment.sola_transaction_id }
+          if (dateUpdated) patch.payment_date = payment.transaction_date
+          await supabase.from('tuition_payments').update(patch).eq('id', existing.id)
+          await supabase.from('sola_sync_payments').update({ import_status: 'duplicate', charge_kind: 'tuition', tuition_payment_id: existing.id }).eq('id', payment.id)
           results.push({
-            syncPaymentId: decision.syncPaymentId, status: 'needs_review',
-            reason: `Might be the same as an existing ${formatMoney(nearby.amount)} payment on ${nearby.payment_date} (${Math.round(nearbyDays)} day${Math.round(nearbyDays) === 1 ? '' : 's'} off) — resolve in the Possible Duplicate Payments review below.`,
+            syncPaymentId: decision.syncPaymentId, status: 'merged',
+            reason: dateUpdated
+              ? `Matched an existing ${existing.payment_date} payment already on file — kept it as one payment and corrected its date to Sola's record (${payment.transaction_date}).`
+              : 'Matched an existing payment already on file for the same month — kept it as one payment, no duplicate created.',
           })
           continue
+        }
+
+        // No same-month match — but if there's a same-amount/same-type payment
+        // nearby in time (within the configured window), don't silently assume
+        // it's unrelated either. Flag it for a human call instead of guessing
+        // either way. Closest by date wins if more than one candidate qualifies.
+        // Skipped entirely for a confirmed schedule — its identity already
+        // settles which family/plan this belongs to, no date guess needed.
+        if (payment.transaction_date && !isScheduleConfirmed) {
+          let nearbyIdx = -1
+          let nearbyDays = Infinity
+          tuitionCandidatePool.forEach((existing, idx) => {
+            if (existing.payment_type !== decision.feeType) return
+            if (isRegFee ? existing.tuition_plan_id != null : existing.tuition_plan_id !== tuitionPlanId) return
+            if (Number(existing.amount) !== Number(payment.amount)) return
+            if (!existing.payment_date) return
+            const diff = daysBetween(existing.payment_date, payment.transaction_date!)
+            if (diff <= mergeWindowDays && diff < nearbyDays) { nearbyDays = diff; nearbyIdx = idx }
+          })
+          if (nearbyIdx !== -1) {
+            const nearby = tuitionCandidatePool[nearbyIdx]
+            tuitionCandidatePool.splice(nearbyIdx, 1)
+            await supabase.from('sola_sync_payments').update({
+              import_status: 'needs_review', charge_kind: 'tuition',
+              duplicate_of_tuition_payment_id: nearby.id,
+              resolved_fee_type: decision.feeType, resolved_tuition_plan_id: isRegFee ? null : (tuitionPlanId ?? null),
+            }).eq('id', payment.id)
+            results.push({
+              syncPaymentId: decision.syncPaymentId, status: 'needs_review',
+              reason: `Might be the same as an existing ${formatMoney(nearby.amount)} payment on ${nearby.payment_date} (${Math.round(nearbyDays)} day${Math.round(nearbyDays) === 1 ? '' : 's'} off) — resolve in the Possible Duplicate Payments review below.`,
+            })
+            continue
+          }
         }
       }
 
@@ -213,20 +245,44 @@ export async function POST(req: Request) {
     if (!decision.category) { results.push({ syncPaymentId: decision.syncPaymentId, status: 'failed', reason: 'A donation category is required.' }); continue }
     if (decision.category === 'event' && !decision.eventId) { results.push({ syncPaymentId: decision.syncPaymentId, status: 'failed', reason: 'An event must be selected for event donations.' }); continue }
 
-    const { data: possibleDup } = await supabase
-      .from('donations').select('id,amount,donation_date')
-      .eq('donor_id', donorId).is('sola_transaction_id', null)
-    const dupMatch = (possibleDup ?? []).find(d => Number(d.amount) === Number(payment.amount) && monthKey(d.donation_date) === monthKey(payment.transaction_date))
-    if (dupMatch) {
+    // An explicit choice from the inline match dropdown — staff already
+    // decided this is the same donation, so apply it now as a correction
+    // (Sola's amount/date win) rather than deferring to needs_review, which
+    // exists for exactly the decision this dropdown already made.
+    if (decision.matchedDonationId) {
+      const { data: existing } = await supabase.from('donations')
+        .select('id').eq('id', decision.matchedDonationId).eq('donor_id', donorId).is('sola_transaction_id', null).maybeSingle()
+      if (!existing) {
+        results.push({ syncPaymentId: decision.syncPaymentId, status: 'failed', reason: 'That matching donation is no longer available — refresh and try again.' })
+        continue
+      }
+      await supabase.from('donations').update({
+        amount: payment.amount, donation_date: payment.transaction_date, sola_transaction_id: payment.sola_transaction_id,
+      }).eq('id', existing.id)
       await supabase.from('sola_sync_payments').update({
-        import_status: 'needs_review', charge_kind: 'donation', duplicate_of_donation_id: dupMatch.id,
+        import_status: 'imported', charge_kind: 'donation', duplicate_resolution: 'correction', donation_id: existing.id,
         resolved_category: decision.category, resolved_event_id: decision.eventId ?? null,
       }).eq('id', payment.id)
-      results.push({
-        syncPaymentId: decision.syncPaymentId, status: 'needs_review',
-        reason: `Looks like it might be the same as an existing ${formatMoney(dupMatch.amount)} donation on ${dupMatch.donation_date} — resolve in the Duplicate Donations review below.`,
-      })
+      results.push({ syncPaymentId: decision.syncPaymentId, status: 'merged', reason: 'Matched to the donation you selected — kept it as one donation, no duplicate created.' })
       continue
+    }
+
+    if (!decision.forceNew) {
+      const { data: possibleDup } = await supabase
+        .from('donations').select('id,amount,donation_date')
+        .eq('donor_id', donorId).is('sola_transaction_id', null)
+      const dupMatch = (possibleDup ?? []).find(d => Number(d.amount) === Number(payment.amount) && monthKey(d.donation_date) === monthKey(payment.transaction_date))
+      if (dupMatch) {
+        await supabase.from('sola_sync_payments').update({
+          import_status: 'needs_review', charge_kind: 'donation', duplicate_of_donation_id: dupMatch.id,
+          resolved_category: decision.category, resolved_event_id: decision.eventId ?? null,
+        }).eq('id', payment.id)
+        results.push({
+          syncPaymentId: decision.syncPaymentId, status: 'needs_review',
+          reason: `Looks like it might be the same as an existing ${formatMoney(dupMatch.amount)} donation on ${dupMatch.donation_date} — resolve in the Duplicate Donations review below.`,
+        })
+        continue
+      }
     }
 
     const { data: insertedDonation, error: donationError } = await supabase.from('donations').insert([{
