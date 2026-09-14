@@ -2,7 +2,16 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { runSolaSync } from '@/lib/sola/sync'
 
-export const maxDuration = 60
+// Was 60 — runSolaSync pages through Sola's *entire* customer/schedule/
+// transaction history every single run (1,148 transactions and growing as
+// of Sept 2026, up from whatever it was at launch), so the margin under a
+// fixed cap only shrinks over time. Confirmed live: two runs (Sep 12, Sep
+// 13) hit a genuine platform-level 502 "Gateway Timeout" after exceeding
+// 60s, not an application error — GitHub Actions' own 20-minute retry
+// cadence means a single missed run has no real effect (nothing here is
+// cumulative; the next run just re-pulls current state), but the margin
+// needed padding regardless of growth trend.
+export const maxDuration = 180
 
 // Runs the same Sola Sync pull as the manual "Run Sync" button (see
 // app/api/sola/sync/run/route.ts) automatically every 20 minutes (see the

@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { runSolaSync } from '@/lib/sola/sync'
 
-export const maxDuration = 60
+// Was 60 — same margin issue as the cron route (see app/api/cron/sola-sync
+// for the confirmed live timeout this fixes), and staff clicking this
+// button manually hits the identical runSolaSync cost.
+export const maxDuration = 180
 
 // Manual trigger for the same sync the cron job runs unattended every 20
 // minutes (see app/api/cron/sola-sync/route.ts) — lets staff pull the latest
