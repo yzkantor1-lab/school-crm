@@ -158,25 +158,55 @@ function AssistantBubble({ text }: { text: string }) {
   )
 }
 
+// Human-readable label + field list for each write tool's confirmation
+// card. Anything not listed here (a future tool, or one we forgot to add)
+// still gets a safe generic fallback below rather than being silently
+// unrenderable — approving stays possible even for an "unforeseen" tool.
+const CONFIRM_LABELS: Record<string, { title: string; fields: [string, string][] }> = {
+  record_donation: { title: 'Record this donation?', fields: [['donorId', 'Donor'], ['amount', 'Amount'], ['donationDate', 'Date'], ['donationMethod', 'Method'], ['purpose', 'Purpose'], ['category', 'Category'], ['notes', 'Notes']] },
+  add_donor: { title: 'Create this donor?', fields: [['name', 'Name'], ['email', 'Email'], ['phoneNumber', 'Phone'], ['address', 'Address'], ['category', 'Category'], ['relationship', 'Relationship']] },
+  record_tuition_payment: { title: 'Record this payment?', fields: [['studentId', 'Student'], ['paymentType', 'Type'], ['amount', 'Amount'], ['paymentDate', 'Date'], ['paymentMethod', 'Method'], ['notes', 'Notes']] },
+  add_student: { title: 'Create this student record?', fields: [['firstName', 'First name'], ['lastName', 'Last name'], ['gradeLevel', 'Grade'], ['status', 'Status'], ['enrollmentDate', 'Enrollment date'], ['fatherName', 'Father'], ['motherName', 'Mother']] },
+  log_expense: { title: 'Log this expense?', fields: [['date', 'Date'], ['category', 'Category'], ['description', 'Description'], ['amount', 'Amount'], ['vendor', 'Vendor'], ['paymentMethod', 'Method']] },
+  add_pledge: { title: 'Create this pledge?', fields: [['donorId', 'Donor'], ['amount', 'Amount'], ['pledgeDate', 'Pledge date'], ['dueDate', 'Due date'], ['purpose', 'Purpose']] },
+  record_pledge_payment: { title: 'Record this pledge payment?', fields: [['pledgeId', 'Pledge'], ['amount', 'Amount'], ['paymentDate', 'Date'], ['paymentMethod', 'Method']] },
+}
+
 function ConfirmCard({ pending, onConfirm, disabled }: { pending: PendingConfirmation; onConfirm: (approved: boolean) => void; disabled: boolean }) {
-  if (pending.name !== 'send_email') {
+  if (pending.name === 'send_email') {
+    const to = Array.isArray(pending.input.to) ? (pending.input.to as string[]).join(', ') : ''
     return (
-      <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-xs">
-        <p className="font-medium text-amber-800 mb-2">Approve this action?</p>
-        <pre className="text-xs bg-white rounded p-2 overflow-x-auto">{JSON.stringify(pending.input, null, 2)}</pre>
+      <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-xs space-y-2">
+        <p className="font-medium text-amber-800 flex items-center gap-1.5"><Mail size={13} /> Ready to send this email?</p>
+        <div className="bg-white rounded-lg p-2.5 space-y-1 text-slate-700">
+          <p><span className="text-slate-400">To:</span> {to}</p>
+          <p><span className="text-slate-400">Subject:</span> {String(pending.input.subject ?? '')}</p>
+          <p className="whitespace-pre-wrap pt-1 border-t border-slate-100">{String(pending.input.body ?? '')}</p>
+        </div>
         <Actions onConfirm={onConfirm} disabled={disabled} />
       </div>
     )
   }
-  const to = Array.isArray(pending.input.to) ? (pending.input.to as string[]).join(', ') : ''
-  return (
-    <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-xs space-y-2">
-      <p className="font-medium text-amber-800 flex items-center gap-1.5"><Mail size={13} /> Ready to send this email?</p>
-      <div className="bg-white rounded-lg p-2.5 space-y-1 text-slate-700">
-        <p><span className="text-slate-400">To:</span> {to}</p>
-        <p><span className="text-slate-400">Subject:</span> {String(pending.input.subject ?? '')}</p>
-        <p className="whitespace-pre-wrap pt-1 border-t border-slate-100">{String(pending.input.body ?? '')}</p>
+
+  const config = CONFIRM_LABELS[pending.name]
+  if (config) {
+    return (
+      <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-xs space-y-2">
+        <p className="font-medium text-amber-800">{config.title}</p>
+        <div className="bg-white rounded-lg p-2.5 space-y-1 text-slate-700">
+          {config.fields.filter(([key]) => pending.input[key] != null && pending.input[key] !== '').map(([key, label]) => (
+            <p key={key}><span className="text-slate-400">{label}:</span> {String(pending.input[key])}</p>
+          ))}
+        </div>
+        <Actions onConfirm={onConfirm} disabled={disabled} />
       </div>
+    )
+  }
+
+  return (
+    <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-xs">
+      <p className="font-medium text-amber-800 mb-2">Approve this action ({pending.name})?</p>
+      <pre className="text-xs bg-white rounded p-2 overflow-x-auto">{JSON.stringify(pending.input, null, 2)}</pre>
       <Actions onConfirm={onConfirm} disabled={disabled} />
     </div>
   )
