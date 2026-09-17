@@ -224,13 +224,15 @@ export async function DELETE(req: Request) {
 
   // Simulated schedules (created while test mode was on) never existed in
   // Sola, so there's nothing to cancel there — just mark it cancelled locally.
+  let warning: string | undefined
   if (!schedule.sola_schedule_id.startsWith('TEST-SCHED-')) {
     const cancelled = await cancelSchedule(schedule.sola_schedule_id)
     if (!cancelled.ok) return NextResponse.json({ error: cancelled.error }, { status: 502 })
+    warning = cancelled.warning
   }
 
   const { error: updateError } = await supabase.from('payment_schedules').update({ status: 'cancelled' }).eq('id', id)
   if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 })
 
-  return NextResponse.json({ cancelled: true })
+  return NextResponse.json({ cancelled: true, warning })
 }

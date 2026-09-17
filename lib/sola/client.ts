@@ -261,10 +261,25 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
   const nextRunStr = current.NextScheduledRunTime ? current.NextScheduledRunTime.slice(0, 10) : null
   const scheduleStartStr = current.StartDate.slice(0, 10)
 
-  let endDateStr = addDaysToDateStr(todayStr, 1)
+  // Confirmed live (the Adler tuition schedule, Sept 2026): a schedule
+  // cancelled before its very first charge has fired, with that first
+  // charge close enough that the StartDate+1 constraint above pushes
+  // EndDate past it, still runs that first charge — Sola locks it in once
+  // it's within its own scheduling window, regardless of the cancellation.
+  // Scoped specifically to "next run === this schedule's own start date"
+  // (i.e. it hasn't fired at all yet) rather than any bump in general —
+  // an already-running schedule's next (second-or-later) charge bumping
+  // EndDate out to meet it is the normal, successful cancel path, not a
+  // near-miss worth warning about.
+  const isFirstUnfiredCharge = nextRunStr === scheduleStartStr
+  const idealEndDateStr = addDaysToDateStr(todayStr, 1)
+  let endDateStr = idealEndDateStr
   if (nextRunStr && nextRunStr > endDateStr) endDateStr = nextRunStr
   const minAfterStart = addDaysToDateStr(scheduleStartStr, 1)
   if (minAfterStart > endDateStr) endDateStr = minAfterStart
+
+  const unstoppableChargeDate = isFirstUnfiredCharge && endDateStr > idealEndDateStr ? scheduleStartStr : null
+
   // EndDate and TotalPayments are mutually exclusive ways of ending a
   // schedule — Sola rejects setting both ("EndDate cannot be set if
   // TotalPayments is not set to one of the following values ['', 'null',
@@ -273,7 +288,14 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
   // otherwise carry the schedule's current TotalPayments straight through
   // alongside this EndDate override, so it has to be explicitly cleared
   // here rather than left to round-trip.
-  return replaceSchedule(scheduleId, { EndDate: endDateStr, TotalPayments: null })
+  const result = await replaceSchedule(scheduleId, { EndDate: endDateStr, TotalPayments: null })
+  if (result.ok && unstoppableChargeDate) {
+    return {
+      ok: true,
+      warning: `This schedule's charge on ${unstoppableChargeDate} for ${current.Amount} could not be stopped — it was already locked in with Sola by the time this was cancelled. It will still process (or already has); no further charges will follow.`,
+    }
+  }
+  return result
 }
 
 // Stamps Custom02 onto a Sola-native schedule — one created directly in

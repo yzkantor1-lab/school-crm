@@ -85,7 +85,7 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
   const [originalRemainingPayments, setOriginalRemainingPayments] = useState(1)
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [saving, setSaving] = useState(false)
-  const [result, setResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
+  const [result, setResult] = useState<{ type: 'success' | 'warning' | 'error'; msg: string } | null>(null)
 
   useEffect(() => {
     async function loadStatus() {
@@ -169,10 +169,11 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
     setSaving(true)
     try {
       const del = await fetch(`/api/sola/schedule?id=${schedule.id}`, { method: 'DELETE' })
+      const delJson = await del.json().catch(() => ({}))
       if (!del.ok) {
-        const j = await del.json().catch(() => ({}))
-        throw new Error(j.error || 'Failed to cancel the old schedule — nothing was changed.')
+        throw new Error(delJson.error || 'Failed to cancel the old schedule — nothing was changed.')
       }
+      const cancelWarning: string | undefined = delJson.warning
       const res = await fetch('/api/sola/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -191,8 +192,10 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
       }
 
       setResult({
-        type: 'success',
-        msg: `${json.isTest ? '[TEST MODE] ' : ''}Schedule replaced — ${formatCurrency(amt)} ${cadenceLabel(schedule.interval_type, schedule.interval_count)}, ${n} payment${n === 1 ? '' : 's'} remaining.`,
+        type: cancelWarning ? 'warning' : 'success',
+        msg: cancelWarning
+          ? `${cancelWarning} The new schedule is set up fine — ${formatCurrency(amt)} ${cadenceLabel(schedule.interval_type, schedule.interval_count)}, ${n} payment${n === 1 ? '' : 's'} remaining — but you may want to follow up with the family about that one charge.`
+          : `${json.isTest ? '[TEST MODE] ' : ''}Schedule replaced — ${formatCurrency(amt)} ${cadenceLabel(schedule.interval_type, schedule.interval_count)}, ${n} payment${n === 1 ? '' : 's'} remaining.`,
       })
       onDone()
     } catch (err) {
@@ -213,7 +216,9 @@ export default function RecalculateScheduleModal({ onClose, onDone, ownerType, o
 
         {result && (
           <div className={`flex items-start gap-2 p-3 rounded-lg text-sm ${
-            result.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+            result.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' :
+            result.type === 'warning' ? 'bg-amber-50 text-amber-800 border border-amber-200' :
+            'bg-red-50 text-red-700 border border-red-200'
           }`}>
             {result.type === 'success' ? <Check size={14} className="mt-0.5 flex-shrink-0" /> : <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />}
             {result.msg}

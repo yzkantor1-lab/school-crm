@@ -65,7 +65,7 @@ export type SolaCreateScheduleResult =
   | { ok: false; error: string }
 
 export type SolaUpdateScheduleResult =
-  | { ok: true }
+  | { ok: true; warning?: string }
   | { ok: false; error: string }
 
 // ── Sola Sync (read-only history pull) ──────────────────────────────────────
