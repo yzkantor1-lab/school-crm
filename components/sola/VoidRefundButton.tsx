@@ -1,7 +1,13 @@
 'use client'
 
 import { useState } from 'react'
-import { Undo2, X, Loader2, AlertCircle, Check } from 'lucide-react'
+import { Undo2, X, Loader2, AlertCircle, Check, AlertTriangle } from 'lucide-react'
+
+// Flip to false (or just delete this const and the badge block below) once
+// this has been confirmed against a real live charge — see the red warning
+// badge next to the button, added 2026-09-17 per the user's request right
+// after this feature shipped, before it had ever been exercised for real.
+const UNVERIFIED_LIVE = true
 
 type Props = {
   recordType: 'tuition_payment' | 'donation'
@@ -22,6 +28,7 @@ export default function VoidRefundButton({ recordType, recordId, amount, hoverCl
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [showCaveat, setShowCaveat] = useState(false)
 
   async function confirm() {
     setLoading(true)
@@ -50,9 +57,30 @@ export default function VoidRefundButton({ recordType, recordId, amount, hoverCl
 
   return (
     <>
-      <button onClick={() => setOpen(true)} className={`p-1 text-slate-300 ${hoverClass} transition-colors`} title="Void or refund this Sola charge">
-        <Undo2 size={13} />
-      </button>
+      <span className="relative inline-flex items-center">
+        <button onClick={() => setOpen(true)} className={`p-1 text-slate-300 ${hoverClass} transition-colors`} title="Void or refund this Sola charge">
+          <Undo2 size={13} />
+        </button>
+        {UNVERIFIED_LIVE && (
+          <button
+            onClick={() => setShowCaveat(v => !v)}
+            title="Not yet confirmed against a real charge"
+            className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 hover:bg-red-600 ring-2 ring-white"
+          />
+        )}
+        {showCaveat && (
+          <div className="absolute z-40 top-full right-0 mt-1 w-64 bg-white border border-red-200 rounded-lg shadow-lg p-3 text-xs text-slate-700">
+            <div className="flex items-start gap-1.5">
+              <AlertTriangle size={14} className="text-red-500 mt-0.5 shrink-0" />
+              <p>
+                This hasn&rsquo;t been tried against a real live charge yet — verify it does what it says (voids or refunds correctly) before
+                relying on it for a larger amount.
+              </p>
+            </div>
+            <button onClick={() => setShowCaveat(false)} className="text-slate-400 hover:text-slate-600 mt-2">Dismiss</button>
+          </div>
+        )}
+      </span>
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
