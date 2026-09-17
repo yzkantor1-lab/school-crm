@@ -4,7 +4,7 @@ import type {
   SolaPaymentMethodInput, SolaCreatePaymentMethodResult,
   SolaChargeInput, SolaChargeResult,
   SolaScheduleInput, SolaCreateScheduleResult, SolaUpdateScheduleResult,
-  SolaCustomer, SolaSchedule, SolaTransaction, SolaCustomerDetail,
+  SolaCustomer, SolaSchedule, SolaTransaction, SolaCustomerDetail, SolaVoidOrRefundResult,
 } from './types'
 
 // Sola's newer customer/recurring-centric REST API (as opposed to the older
@@ -444,7 +444,7 @@ export async function getCustomerDetail(customerId: string): Promise<SolaCustome
 // known gap rather than silently claiming complete history.
 export async function listAllTransactions(): Promise<SolaTransaction[]> {
   type Raw = SolaListResponse & {
-    Transactions?: Array<{ TransactionId: string; ScheduleId?: string; CustomerId: string; TransactionDate: string; GatewayStatus?: string }>
+    Transactions?: Array<{ TransactionId: string; ScheduleId?: string; CustomerId: string; TransactionDate: string; GatewayStatus?: string; GatewayRefNum?: string }>
   }
   const all: SolaTransaction[] = []
   let nextToken = ''
@@ -452,9 +452,70 @@ export async function listAllTransactions(): Promise<SolaTransaction[]> {
     const json = await solaListRequest<Raw>('/ListTransactions', { NextToken: nextToken })
     if (json.Result !== 'S') throw new Error(json.Error || 'Failed to list Sola transactions')
     for (const t of json.Transactions ?? []) {
-      all.push({ transactionId: t.TransactionId, scheduleId: t.ScheduleId, customerId: t.CustomerId, transactionDate: t.TransactionDate, gatewayStatus: t.GatewayStatus })
+      all.push({
+        transactionId: t.TransactionId, scheduleId: t.ScheduleId, customerId: t.CustomerId,
+        transactionDate: t.TransactionDate, gatewayStatus: t.GatewayStatus, gatewayRefNum: t.GatewayRefNum,
+      })
     }
     nextToken = json.NextToken ?? ''
   } while (nextToken)
   return all
+}
+
+// ── Void / refund (the older xCommand gatewayjson API) ──────────────────────
+// The v2 recurring/customer API used everywhere else in this file has no
+// void/refund endpoints at all (confirmed against docs.solapayments.com/api/
+// recurring) — those only exist on Cardknox's classic gatewayjson API, a
+// completely separate base URL and request shape (form-style x-prefixed
+// fields, not the v2 JSON bodies above), documented at
+// docs.solapayments.com/api/transaction. Scoped to check:* commands only —
+// every payment method this app stores is `method_type: 'ach'` (bank
+// transfer), never a card, so cc:void/cc:refund are never applicable here.
+const GATEWAY_JSON_URL = 'https://x1.cardknox.com/gatewayjson'
+const GATEWAY_JSON_VERSION = '5.0.0'
+
+type GatewayJsonResponse = {
+  xResult?: string   // 'A' approved, 'E' error, 'D' declined
+  xStatus?: string
+  xError?: string
+  xRefNum?: string
+}
+
+async function gatewayJsonRequest(fields: Record<string, unknown>): Promise<GatewayJsonResponse> {
+  const res = await fetch(GATEWAY_JSON_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      xKey: apiKey(), xVersion: GATEWAY_JSON_VERSION, xSoftwareName: SOFTWARE_NAME, xSoftwareVersion: SOFTWARE_VERSION,
+      ...fields,
+    }),
+  })
+  return (await res.json()) as GatewayJsonResponse
+}
+
+// gatewayRefNum is Cardknox's own numeric reference (SolaTransaction.
+// gatewayRefNum from listAllTransactions), NOT the composite Sola
+// TransactionId ("c123_s456_t789") used everywhere else in this file — the
+// two APIs identify a transaction differently.
+//
+// Tries check:void first (free, instant, only works pre-settlement —
+// "pending being sent to the bank, typically end of each day" per docs)
+// and falls back to check:refund (the only option once it's settled; full
+// amount only — Cardknox doesn't support partial ACH refunds) if that
+// fails. Callers get back which one actually happened so they can tell
+// staff the right thing (an instant void that never moved money, vs. a
+// refund that takes a few business days to land back in the payer's
+// account) rather than a single ambiguous "done."
+export async function voidOrRefundTransaction(gatewayRefNum: string, amount: number): Promise<SolaVoidOrRefundResult> {
+  if (await isTestMode()) {
+    return { ok: true, action: 'voided', refNum: `TEST-VOID-${Date.now()}` }
+  }
+
+  const voidRes = await gatewayJsonRequest({ xCommand: 'check:void', xRefNum: gatewayRefNum })
+  if (voidRes.xResult === 'A') return { ok: true, action: 'voided', refNum: voidRes.xRefNum ?? gatewayRefNum }
+
+  const refundRes = await gatewayJsonRequest({ xCommand: 'check:refund', xRefNum: gatewayRefNum, xAmount: amount })
+  if (refundRes.xResult === 'A') return { ok: true, action: 'refunded', refNum: refundRes.xRefNum ?? gatewayRefNum }
+
+  return { ok: false, error: refundRes.xError || voidRes.xError || 'Void and refund both failed.' }
 }

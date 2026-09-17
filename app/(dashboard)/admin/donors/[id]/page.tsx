@@ -24,6 +24,7 @@ import CustomCalendarPanel from '@/components/sola/CustomCalendarPanel'
 import DonorDocumentsPanel from '@/components/DonorDocumentsPanel'
 import { archiveDonorDocument } from '@/lib/documentArchive'
 import IncomingSolaPayments, { type PendingSolaPayment } from '@/components/sola/IncomingSolaPayments'
+import VoidRefundButton from '@/components/sola/VoidRefundButton'
 import NameInput from '@/components/NameInput'
 import PhoneInput from '@/components/PhoneInput'
 import TitleSelect from '@/components/TitleSelect'
@@ -581,6 +582,9 @@ export default function DonorDetailPage() {
                         className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition"><Edit2 size={15} /></button>
                       <button onClick={() => toggleArchive(donation.id, donation.archived)}
                         className="p-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition">{donation.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}</button>
+                      {donation.sola_transaction_id && (
+                        <VoidRefundButton recordType="donation" recordId={donation.id} amount={Number(donation.amount)} hoverClass="hover:text-blue-600" onDone={fetchData} />
+                      )}
                       <button onClick={() => deleteDonation(donation.id)}
                         className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition"><Trash2 size={15} /></button>
                     </div>

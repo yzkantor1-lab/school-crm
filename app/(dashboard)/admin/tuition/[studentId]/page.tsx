@@ -28,6 +28,7 @@ import CustomCalendarModal from '@/components/sola/CustomCalendarModal'
 import CustomCalendarPanel from '@/components/sola/CustomCalendarPanel'
 import { archiveTuitionDocument } from '@/lib/documentArchive'
 import IncomingSolaPayments, { type PendingSolaPayment } from '@/components/sola/IncomingSolaPayments'
+import VoidRefundButton from '@/components/sola/VoidRefundButton'
 
 type Student = {
   id: string
@@ -1923,6 +1924,9 @@ export default function StudentTuitionPage() {
                                 <button onClick={() => openEditPayment(pay)} className="p-1 text-slate-300 hover:text-rose-600 transition-colors" title="Edit">
                                   <Edit2 size={13} />
                                 </button>
+                                {pay.sola_transaction_id && (
+                                  <VoidRefundButton recordType="tuition_payment" recordId={pay.id} amount={Number(pay.amount)} hoverClass="hover:text-rose-600" onDone={load} />
+                                )}
                                 <button onClick={() => deletePayment(pay.id)} className="p-1 text-slate-300 hover:text-red-600 transition-colors" title="Delete">
                                   <Trash2 size={13} />
                                 </button>
@@ -2053,6 +2057,9 @@ export default function StudentTuitionPage() {
                               <button onClick={() => openEditPayment(pay, PHONE_CHARGE_KEY)} className="p-1 text-slate-300 hover:text-sky-600 transition-colors" title="Edit">
                                 <Edit2 size={13} />
                               </button>
+                              {pay.sola_transaction_id && (
+                                <VoidRefundButton recordType="tuition_payment" recordId={pay.id} amount={Number(pay.amount)} hoverClass="hover:text-sky-600" onDone={load} />
+                              )}
                               <button onClick={() => deletePayment(pay.id)} className="p-1 text-slate-300 hover:text-red-600 transition-colors" title="Delete">
                                 <Trash2 size={13} />
                               </button>
@@ -2184,6 +2191,9 @@ export default function StudentTuitionPage() {
                             <button onClick={() => openEditPayment(pay, bfKey(currentPlan.id))} className="p-1 text-slate-300 hover:text-amber-600 transition-colors" title="Edit">
                               <Edit2 size={13} />
                             </button>
+                            {pay.sola_transaction_id && (
+                              <VoidRefundButton recordType="tuition_payment" recordId={pay.id} amount={Number(pay.amount)} hoverClass="hover:text-amber-600" onDone={load} />
+                            )}
                             <button onClick={() => deletePayment(pay.id)} className="p-1 text-slate-300 hover:text-red-600 transition-colors" title="Delete">
                               <Trash2 size={13} />
                             </button>
@@ -2951,6 +2961,9 @@ export default function StudentTuitionPage() {
                                       <button onClick={() => openEditPayment(pay)} className="p-1 text-slate-300 hover:text-blue-600 transition-colors" title="Edit">
                                         <Edit2 size={13} />
                                       </button>
+                                      {pay.sola_transaction_id && (
+                                        <VoidRefundButton recordType="tuition_payment" recordId={pay.id} amount={Number(pay.amount)} hoverClass="hover:text-blue-600" onDone={load} />
+                                      )}
                                       <button onClick={() => deletePayment(pay.id)} className="p-1 text-slate-300 hover:text-red-600 transition-colors" title="Delete">
                                         <Trash2 size={13} />
                                       </button>

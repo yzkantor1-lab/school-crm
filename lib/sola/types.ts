@@ -102,7 +102,15 @@ export type SolaTransaction = {
   customerId: string
   transactionDate: string
   gatewayStatus?: string
+  // Cardknox's own numeric reference number — this, not transactionId, is
+  // what the older gatewayjson API (void/refund) identifies a transaction
+  // by. See voidOrRefundTransaction in lib/sola/client.ts.
+  gatewayRefNum?: string
 }
+
+export type SolaVoidOrRefundResult =
+  | { ok: true; action: 'voided' | 'refunded'; refNum: string }
+  | { ok: false; error: string }
 
 // Full contact detail for one customer — GetCustomer returns more than
 // ListCustomers does (confirmed empirically: address fields only ever show
