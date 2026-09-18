@@ -263,22 +263,33 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
 
   // Confirmed live (the Adler tuition schedule, Sept 2026): a schedule
   // cancelled before its very first charge has fired, with that first
-  // charge close enough that the StartDate+1 constraint above pushes
+  // charge close enough that the StartDate+1 constraint below pushes
   // EndDate past it, still runs that first charge — Sola locks it in once
   // it's within its own scheduling window, regardless of the cancellation.
   // Scoped specifically to "next run === this schedule's own start date"
-  // (i.e. it hasn't fired at all yet) rather than any bump in general —
-  // an already-running schedule's next (second-or-later) charge bumping
-  // EndDate out to meet it is the normal, successful cancel path, not a
-  // near-miss worth warning about.
+  // (i.e. it hasn't fired at all yet), not any EndDate bump in general — an
+  // already-running schedule's next (second-or-later) charge bumping
+  // EndDate out to meet it is the normal, successful cancel path below.
+  //
+  // For exactly this case, use /DisableSchedule instead of the EndDate
+  // dance — confirmed live (a real $1 donation schedule, Sept 17 2026,
+  // disabled ~2 hours before its first run): it stops the schedule outright,
+  // NextScheduledRunTime disappears entirely, and the first charge never
+  // fires. That's the fix for the exact failure mode above. Left scoped to
+  // this one case rather than replacing the EndDate approach everywhere —
+  // an already-running schedule (with prior successful payments) hasn't
+  // been tested against DisableSchedule, so there's no reason to touch a
+  // path that's worked correctly in production the whole time.
   const isFirstUnfiredCharge = nextRunStr === scheduleStartStr
+  if (isFirstUnfiredCharge) {
+    return disableSchedule(scheduleId)
+  }
+
   const idealEndDateStr = addDaysToDateStr(todayStr, 1)
   let endDateStr = idealEndDateStr
   if (nextRunStr && nextRunStr > endDateStr) endDateStr = nextRunStr
   const minAfterStart = addDaysToDateStr(scheduleStartStr, 1)
   if (minAfterStart > endDateStr) endDateStr = minAfterStart
-
-  const unstoppableChargeDate = isFirstUnfiredCharge && endDateStr > idealEndDateStr ? scheduleStartStr : null
 
   // EndDate and TotalPayments are mutually exclusive ways of ending a
   // schedule — Sola rejects setting both ("EndDate cannot be set if
@@ -288,14 +299,7 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
   // otherwise carry the schedule's current TotalPayments straight through
   // alongside this EndDate override, so it has to be explicitly cleared
   // here rather than left to round-trip.
-  const result = await replaceSchedule(scheduleId, { EndDate: endDateStr, TotalPayments: null })
-  if (result.ok && unstoppableChargeDate) {
-    return {
-      ok: true,
-      warning: `This schedule's charge on ${unstoppableChargeDate} for ${current.Amount} could not be stopped — it was already locked in with Sola by the time this was cancelled. It will still process (or already has); no further charges will follow.`,
-    }
-  }
-  return result
+  return replaceSchedule(scheduleId, { EndDate: endDateStr, TotalPayments: null })
 }
 
 // A separate on/off toggle from cancelSchedule's EndDate approach — Sola
