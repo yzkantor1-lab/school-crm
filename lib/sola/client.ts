@@ -223,83 +223,25 @@ async function replaceSchedule(scheduleId: string, overrides: Record<string, unk
   return { ok: false, error: json.Error || 'Failed to update schedule' }
 }
 
-// Stops future occurrences of a schedule. Not gated by test mode itself —
-// callers only ever cancel schedules that exist (either a real one from live
-// mode, or one that was never actually created in Sola because it was
-// simulated — see the schedule cancellation route for that distinction).
-// Adds `days` calendar days to a "YYYY-MM-DD" date string, anchored to UTC
-// midnight so the arithmetic can't drift by a partial day depending on the
-// server's local timezone — see cancelSchedule for why that matters here.
-function addDaysToDateStr(dateStr: string, days: number): string {
-  const d = new Date(`${dateStr}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + days)
-  return d.toISOString().slice(0, 10)
-}
-
+// Stops future occurrences of a schedule. Used to go through UpdateSchedule
+// (setting EndDate), which is provably unreliable — confirmed live twice on
+// 2026-09-18 against a real $1 donation schedule: cancelling before its
+// first charge fired still let that first charge process (Sola forces
+// EndDate to land at-or-after the next scheduled run, which for an unfired
+// schedule is its own StartDate — see git history for the original version
+// of this function), AND, more surprisingly, cancelling it again right
+// after that first charge succeeded left NextScheduledRunTime still showing
+// the following month's date with IsActive still true — i.e. even a normal,
+// already-running schedule's very next charge is not reliably stopped by
+// EndDate. /DisableSchedule, tested both times back to back on the same
+// schedule, cleanly cleared NextScheduledRunTime and IsActive in both
+// cases — unambiguous, unlike EndDate's dangling state. Not gated by test
+// mode itself — callers only ever cancel schedules that exist (either a
+// real one from live mode, or one that was never actually created in Sola
+// because it was simulated — see the schedule cancellation route for that
+// distinction).
 export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateScheduleResult> {
-  const current = await getScheduleRaw(scheduleId)
-  if (!current) return { ok: false, error: 'Schedule not found in Sola' }
-
-  // EndDate has to satisfy three constraints Sola enforces, all confirmed
-  // live: strictly in the future ("xExpireDate must be in the future"),
-  // not before the schedule's own next scheduled run ("cannot be set to a
-  // value before the next run time" — it won't retroactively cancel a
-  // charge it's already committed to run next), and strictly AFTER the
-  // schedule's own StartDate, not just on it ("xExpireDate must be after
-  // xStartDate" — hit on a schedule that hadn't run yet, where
-  // NextScheduledRunTime turned out to equal StartDate exactly).
-  //
-  // This has to be done in plain "YYYY-MM-DD" string comparisons, not Date
-  // objects: NextScheduledRunTime comes back with a time component
-  // ("2026-09-16 01:00:00"), parsed as local time, while StartDate is
-  // date-only ("2026-09-16"), parsed as UTC midnight — on a server west of
-  // UTC those land a few hours apart even though they're the same calendar
-  // day, which made an earlier Date-object version of this look like it
-  // satisfied "strictly after" while the truncated date string we actually
-  // send Sola collapsed right back onto the same day.
-  const todayStr = new Date().toISOString().slice(0, 10)
-  const nextRunStr = current.NextScheduledRunTime ? current.NextScheduledRunTime.slice(0, 10) : null
-  const scheduleStartStr = current.StartDate.slice(0, 10)
-
-  // Confirmed live (the Adler tuition schedule, Sept 2026): a schedule
-  // cancelled before its very first charge has fired, with that first
-  // charge close enough that the StartDate+1 constraint below pushes
-  // EndDate past it, still runs that first charge — Sola locks it in once
-  // it's within its own scheduling window, regardless of the cancellation.
-  // Scoped specifically to "next run === this schedule's own start date"
-  // (i.e. it hasn't fired at all yet), not any EndDate bump in general — an
-  // already-running schedule's next (second-or-later) charge bumping
-  // EndDate out to meet it is the normal, successful cancel path below.
-  //
-  // For exactly this case, use /DisableSchedule instead of the EndDate
-  // dance — confirmed live (a real $1 donation schedule, Sept 17 2026,
-  // disabled ~2 hours before its first run): it stops the schedule outright,
-  // NextScheduledRunTime disappears entirely, and the first charge never
-  // fires. That's the fix for the exact failure mode above. Left scoped to
-  // this one case rather than replacing the EndDate approach everywhere —
-  // an already-running schedule (with prior successful payments) hasn't
-  // been tested against DisableSchedule, so there's no reason to touch a
-  // path that's worked correctly in production the whole time.
-  const isFirstUnfiredCharge = nextRunStr === scheduleStartStr
-  if (isFirstUnfiredCharge) {
-    return disableSchedule(scheduleId)
-  }
-
-  const idealEndDateStr = addDaysToDateStr(todayStr, 1)
-  let endDateStr = idealEndDateStr
-  if (nextRunStr && nextRunStr > endDateStr) endDateStr = nextRunStr
-  const minAfterStart = addDaysToDateStr(scheduleStartStr, 1)
-  if (minAfterStart > endDateStr) endDateStr = minAfterStart
-
-  // EndDate and TotalPayments are mutually exclusive ways of ending a
-  // schedule — Sola rejects setting both ("EndDate cannot be set if
-  // TotalPayments is not set to one of the following values ['', 'null',
-  // '0']"), confirmed live on a schedule that had just been recalculated
-  // into a fixed-#-of-payments plan. replaceSchedule's base resend would
-  // otherwise carry the schedule's current TotalPayments straight through
-  // alongside this EndDate override, so it has to be explicitly cleared
-  // here rather than left to round-trip.
-  return replaceSchedule(scheduleId, { EndDate: endDateStr, TotalPayments: null })
+  return disableSchedule(scheduleId)
 }
 
 // A separate on/off toggle from cancelSchedule's EndDate approach — Sola
