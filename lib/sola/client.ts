@@ -298,6 +298,29 @@ export async function cancelSchedule(scheduleId: string): Promise<SolaUpdateSche
   return result
 }
 
+// A separate on/off toggle from cancelSchedule's EndDate approach — Sola
+// documents /DisableSchedule and /EnableSchedule independently of
+// UpdateSchedule (docs.solapayments.com/api/recurring), with none of
+// UpdateSchedule's EndDate/StartDate/Revision constraints. Added to test a
+// real question: cancelSchedule (EndDate) has been confirmed live to be
+// unable to stop a schedule's first, not-yet-fired charge no matter how far
+// in advance it's called (the Adler incidents, Sept 2026) — it's untested
+// whether this simpler toggle behaves the same way or actually succeeds
+// where that one can't. NOT wired into any route or UI yet — do that only
+// after a live test (a real schedule, disabled before its first charge)
+// confirms which way it actually behaves.
+export async function disableSchedule(scheduleId: string): Promise<SolaUpdateScheduleResult> {
+  const json = await solaRequest('/DisableSchedule', { ScheduleId: scheduleId })
+  if (json.Result === 'S') return { ok: true }
+  return { ok: false, error: json.Error || 'Failed to disable schedule' }
+}
+
+export async function enableSchedule(scheduleId: string): Promise<SolaUpdateScheduleResult> {
+  const json = await solaRequest('/EnableSchedule', { ScheduleId: scheduleId })
+  if (json.Result === 'S') return { ok: true }
+  return { ok: false, error: json.Error || 'Failed to enable schedule' }
+}
+
 // Stamps Custom02 onto a Sola-native schedule — one created directly in
 // Sola's own dashboard, outside the CRM, so it never got the {type,id,purpose}
 // tag CreateSchedule attaches (app/api/sola/schedule/route.ts). Lets a
