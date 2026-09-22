@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { Bot, Send, User, Loader2, Mail, X } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
+import { getDonationReceiptPdfBase64 } from '@/lib/donationPdf'
 
 // Kept intentionally loose (not the full Anthropic SDK types) — this widget
 // only ever treats `messages` as an opaque blob it got from the server and
@@ -40,7 +42,7 @@ export default function AssistantWidget() {
     el.style.height = `${el.scrollHeight}px`
   }, [input, open])
 
-  async function send(nextMessages: Message[], confirm?: { toolUseId: string; approved: boolean }) {
+  async function send(nextMessages: Message[], confirm?: { toolUseId: string; approved: boolean; clientData?: { receiptPdfBase64?: string } }) {
     setLoading(true)
     setError('')
     try {
@@ -68,9 +70,25 @@ export default function AssistantWidget() {
     send(next)
   }
 
-  function handleConfirm(approved: boolean) {
+  async function handleConfirm(approved: boolean) {
     if (!pending) return
-    const toolUseId = pending.toolUseId
+    const { toolUseId, name, input: toolInput } = pending
+    if (approved && name === 'send_donation_receipt') {
+      // The receipt's letterhead can only be drawn in the browser, so build
+      // the PDF here (same code as the donor page's Email receipt) and hand
+      // it to the server along with the approval.
+      setLoading(true)
+      setError('')
+      try {
+        const receiptPdfBase64 = await buildDonationReceiptBase64(String(toolInput.donationId ?? ''), toolInput.note ? String(toolInput.note) : undefined)
+        setPending(null)
+        await send(messages, { toolUseId, approved, clientData: { receiptPdfBase64 } })
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Couldn\'t build the receipt PDF.')
+        setLoading(false)
+      }
+      return
+    }
     setPending(null)
     send(messages, { toolUseId, approved })
   }
@@ -202,7 +220,43 @@ const CONFIRM_LABELS: Record<string, { title: string; fields: [string, string][]
   redo_last_undo: { title: 'Redo this undone change?', fields: [['actionId', 'Specific action']] },
 }
 
+async function buildDonationReceiptBase64(donationId: string, note: string | undefined): Promise<string> {
+  const supabase = createClient()
+  const [{ data: donation }, { data: taxSetting }] = await Promise.all([
+    supabase.from('donations').select('amount,donation_date,donation_method,purpose,notes,donors(name,email,address)').eq('id', donationId).single(),
+    supabase.from('site_settings').select('value').eq('key', 'tax_id').maybeSingle(),
+  ])
+  if (!donation) throw new Error('Couldn\'t find that donation to build its receipt.')
+  const donor = donation.donors as unknown as { name: string; email: string | null; address: string | null }
+  const { base64 } = await getDonationReceiptPdfBase64({
+    donor: { name: donor.name, email: donor.email, address: donor.address },
+    donation: {
+      amount: Number(donation.amount), donation_date: donation.donation_date, donation_method: donation.donation_method,
+      purpose: donation.purpose, notes: donation.notes,
+    },
+    extraNote: note,
+    taxId: taxSetting?.value ?? null,
+  })
+  return base64
+}
+
 function ConfirmCard({ pending, onConfirm, disabled }: { pending: PendingConfirmation; onConfirm: (approved: boolean) => void; disabled: boolean }) {
+  if (pending.name === 'send_donation_receipt') {
+    const to = Array.isArray(pending.input.to) ? (pending.input.to as string[]).join(', ') : ''
+    return (
+      <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-xs space-y-2">
+        <p className="font-medium text-amber-800 flex items-center gap-1.5"><Mail size={13} /> Email this donation receipt?</p>
+        <div className="bg-white rounded-lg p-2.5 space-y-1 text-slate-700">
+          <p><span className="text-slate-400">To:</span> {to}</p>
+          <p><span className="text-slate-400">Subject:</span> {String(pending.input.subject || 'Donation Receipt — (donor name)')}</p>
+          {pending.input.note ? <p><span className="text-slate-400">Note on receipt:</span> {String(pending.input.note)}</p> : null}
+          {pending.input.body ? <p className="whitespace-pre-wrap pt-1 border-t border-slate-100">{String(pending.input.body)}</p> : null}
+          <p className="text-slate-400 pt-1 border-t border-slate-100">Attachment: donation receipt PDF</p>
+        </div>
+        <Actions onConfirm={onConfirm} disabled={disabled} />
+      </div>
+    )
+  }
   if (pending.name === 'send_email') {
     const to = Array.isArray(pending.input.to) ? (pending.input.to as string[]).join(', ') : ''
     return (

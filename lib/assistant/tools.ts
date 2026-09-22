@@ -2,6 +2,7 @@ import type Anthropic from '@anthropic-ai/sdk'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendMailViaGoogle } from '@/lib/email'
 import { recomputePledgeTotals } from '@/lib/pledges'
+import { archiveDonorDocument } from '@/lib/documentArchive'
 
 type Db = SupabaseClient
 
@@ -76,7 +77,7 @@ export const READ_ONLY_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'get_donor_summary',
-    description: "Get a donor's total giving, giving by year, most recent donations, and pledges (each with its payments).",
+    description: "Get a donor's contact email, total giving, giving by year, most recent donations, and pledges (each with its payments).",
     input_schema: {
       type: 'object',
       properties: { donorId: { type: 'string', description: 'Donor id from search_donor' } },
@@ -153,8 +154,25 @@ export const SENSITIVE_TOOLS: Anthropic.Tool[] = [
         to: { type: 'array', items: { type: 'string' }, description: 'Recipient email addresses' },
         subject: { type: 'string' },
         body: { type: 'string', description: 'Plain text body' },
+        donorId: { type: 'string', description: 'Optional — the donor this email is about, so it shows in their Communications history' },
+        studentId: { type: 'string', description: 'Optional — the student this email is about, so it shows in their Communications history' },
       },
       required: ['to', 'subject', 'body'],
+    },
+  },
+  {
+    name: 'send_donation_receipt',
+    description: 'Email the official donation receipt PDF (letterhead, amount, date, method, purpose, tax ID) for one donation — the same receipt the donor page\'s "Email receipt" button sends. Find the donation id and the donor\'s email with get_donor_summary first; if the donor has no email on file, offer to add one with update_donor. The send is logged in Communications and the PDF is saved to the donor\'s Documents. Cannot be undone once sent.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        donationId: { type: 'string' },
+        to: { type: 'array', items: { type: 'string' }, description: 'Recipient email addresses — normally the donor\'s own email' },
+        note: { type: 'string', description: 'Optional note printed on the receipt itself' },
+        subject: { type: 'string', description: 'Optional — defaults to "Donation Receipt — <donor name>"' },
+        body: { type: 'string', description: 'Optional plain text email body — defaults to a short thank-you mentioning the amount and date' },
+      },
+      required: ['donationId', 'to'],
     },
   },
   {
@@ -520,7 +538,7 @@ export async function executeReadOnlyTool(db: Db, name: string, input: Record<st
 
     case 'get_donor_summary': {
       const donorId = String(input.donorId ?? '')
-      const { data: donor, error: donorError } = await db.from('donors').select('name').eq('id', donorId).single()
+      const { data: donor, error: donorError } = await db.from('donors').select('name,email').eq('id', donorId).single()
       if (donorError || !donor) return { error: 'Donor not found.' }
       const { data: donations } = await db.from('donations')
         .select('id,amount,donation_date,category,purpose,notes,donation_method').eq('donor_id', donorId)
@@ -541,6 +559,7 @@ export async function executeReadOnlyTool(db: Db, name: string, input: Record<st
       // givingByYear above still reflect the full history.
       return {
         donor: donor.name,
+        email: donor.email,
         totalGiving: money(total),
         givingByYear: Object.fromEntries([...byYear.entries()].map(([y, v]) => [y, money(v)])),
         donations: (donations ?? []).slice(0, 30).map(d => ({
@@ -771,7 +790,18 @@ function pick(input: Record<string, unknown>, mapping: [inputKey: string, column
   return patch
 }
 
-export async function executeSensitiveTool(db: Db, name: string, input: Record<string, unknown>, userId: string | null): Promise<unknown> {
+// Things only the browser can supply for a tool run, sent along with the
+// staff member's approval. The donation receipt PDF is drawn with a canvas-
+// rendered Hebrew letterhead (see lib/letterhead.ts), so it can only be
+// generated client-side — the widget builds it after approval and the
+// server attaches it; recipients/subject/body still come from the approved
+// tool input, never from here.
+export type ClientToolData = { receiptPdfBase64?: string }
+
+const MAX_RECEIPT_PDF_BASE64 = 7_000_000 // ~5 MB of PDF
+
+export async function executeSensitiveTool(db: Db, name: string, input: Record<string, unknown>, userId: string | null,
+  clientData: ClientToolData = {}): Promise<unknown> {
   switch (name) {
     case 'send_email': {
       const to = Array.isArray(input.to) ? input.to.map(String) : []
@@ -779,7 +809,39 @@ export async function executeSensitiveTool(db: Db, name: string, input: Record<s
       const body = String(input.body ?? '')
       if (!to.length || !subject || !body) return { error: 'Missing to, subject, or body.' }
       const result = await sendMailViaGoogle(db, { to, subject, body })
+      // Best-effort, same as EmailPdfModal — the email already went out.
+      await db.from('communications').insert([{
+        type: 'email', subject, body, recipients: to.join(', '), sent_from_email: result.fromEmail,
+        donor_id: input.donorId ?? null, student_id: input.studentId ?? null,
+      }])
       return { ...result, success: true }
+    }
+
+    case 'send_donation_receipt': {
+      const to = Array.isArray(input.to) ? input.to.map(String).filter(Boolean) : []
+      if (!to.length) return { error: 'No recipient given — the donor may not have an email on file.' }
+      const pdf = clientData.receiptPdfBase64 ?? ''
+      // "JVBER" is base64 for "%PDF" — cheap sanity check that the browser
+      // actually sent a PDF and not something else.
+      if (!pdf.startsWith('JVBER') || pdf.length > MAX_RECEIPT_PDF_BASE64) return { error: 'The receipt PDF couldn\'t be generated in the browser, so nothing was sent. Try again, or use Email receipt on the donor\'s page.' }
+      const { data: donation, error: donationError } = await db.from('donations')
+        .select('id,amount,donation_date,donor_id,donors(name)').eq('id', String(input.donationId ?? '')).single()
+      if (donationError || !donation) return { error: 'Donation not found.' }
+      const donorName = (donation.donors as unknown as { name: string } | null)?.name ?? 'Donor'
+      const filename = `donation-receipt-${donorName.replace(/\s+/g, '-').toLowerCase()}-${donation.donation_date}.pdf`
+      const subject = String(input.subject || `Donation Receipt — ${donorName}`)
+      const body = String(input.body || `Hi,\n\nPlease find attached your receipt for your generous donation of ${money(donation.amount)} on ${new Date(donation.donation_date + 'T00:00:00').toLocaleDateString('en-US')}.\n\nThank you for your support.`)
+      const result = await sendMailViaGoogle(db, { to, subject, body, attachments: [{ filename, content: pdf }] })
+      // Both best-effort, mirroring EmailPdfModal's receipt send.
+      await db.from('communications').insert([{
+        type: 'email', subject, body, donor_id: donation.donor_id, recipients: to.join(', '),
+        attachment_filename: filename, pdf_base64: pdf, sent_from_email: result.fromEmail,
+      }])
+      await archiveDonorDocument(db as Parameters<typeof archiveDonorDocument>[0], {
+        donorId: donation.donor_id, fileName: filename, base64: pdf,
+        notes: `Emailed to ${to.join(', ')} on ${new Date().toLocaleDateString('en-US')}${input.note ? ` — note: ${input.note}` : ''}`,
+      })
+      return { success: true, sent: result.sent, fromEmail: result.fromEmail, attachment: filename }
     }
 
     case 'record_donation': {
