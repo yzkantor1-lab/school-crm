@@ -27,8 +27,18 @@ export default function AssistantWidget() {
   const [pending, setPending] = useState<PendingConfirmation | null>(null)
   const [error, setError] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { if (open) bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, pending, open])
+
+  // Grow the request box with its content (so a long message stays fully
+  // visible while typing) up to the CSS max-height, then scroll inside it.
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [input, open])
 
   async function send(nextMessages: Message[], confirm?: { toolUseId: string; approved: boolean }) {
     setLoading(true)
@@ -78,7 +88,7 @@ export default function AssistantWidget() {
   }
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 w-[min(24rem,calc(100vw-2.5rem))] h-[min(32rem,calc(100vh-6rem))] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+    <div className="fixed bottom-5 right-5 z-50 w-[min(24rem,calc(100vw-2.5rem))] h-[min(40rem,calc(100vh-6rem))] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-4 py-3 bg-blue-600 text-white shrink-0">
         <div className="flex items-center gap-2">
           <Bot size={18} />
@@ -106,14 +116,16 @@ export default function AssistantWidget() {
         <div ref={bottomRef} />
       </div>
 
-      <div className="flex gap-2 border-t border-slate-200 p-3 shrink-0">
-        <input
+      <div className="flex items-end gap-2 border-t border-slate-200 p-3 shrink-0">
+        <textarea
+          ref={inputRef}
+          rows={1}
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
           placeholder="Ask the assistant…"
           disabled={loading || !!pending}
-          className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
+          className="flex-1 resize-none max-h-60 overflow-y-auto rounded-lg border border-slate-300 px-3 py-2 text-sm leading-5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
         />
         <button
           onClick={handleSend}
