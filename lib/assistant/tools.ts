@@ -88,6 +88,14 @@ export const READ_ONLY_TOOLS: Anthropic.Tool[] = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'list_recent_assistant_actions',
+    description: 'List the assistant\'s own recent tuition/donation changes (inserts, edits, deletes) with their ids, most recent first, including which are already undone. Use this when the staff member asks "what did you just do", "undo that", or "redo it" without naming a specific record — it tells you which action id to pass to undo_last_change / redo_last_undo.',
+    input_schema: {
+      type: 'object',
+      properties: { limit: { type: 'number', description: 'default 10, max 50' } },
+    },
+  },
+  {
     name: 'run_report',
     description: `Run a read-only report against any table in the CRM: students, staff, classes, academic_terms, lunch_menus/accounts/transactions, books, book_loans, tuition_plans, tuition_payments, tuition_documents, custom_payment_calendars(+entries), payment_methods/schedules/transactions, payments, invoices(+items), fee_categories, ledger_accounts/entries/lines, expenses, donors, donations, pledges, pledge_payments, recurring_donations, events, communications, email_accounts, site_settings/pages/blocks, document_templates, merge_documents, sola_sync_customers/schedules/payments, guardians, student_guardians, donor_students, donor_documents. This is the general tool for "how many / how much / list / total" questions that aren't already covered by a more specific tool (prefer get_tuition_status / get_donor_summary for those). Sensitive columns (SSN, medical notes, credentials, payment tokens) are always stripped from results and can't be requested.`,
     input_schema: {
@@ -271,6 +279,81 @@ export const SENSITIVE_TOOLS: Anthropic.Tool[] = [
       required: ['pledgeId', 'amount'],
     },
   },
+  {
+    name: 'update_tuition_payment',
+    description: 'Edit an existing tuition, building fund, registration fee, or phone charge payment. Look up the payment id first via get_tuition_status (its payments list). Only the fields passed are changed. Logged — can be undone with undo_last_change.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        paymentId: { type: 'string' },
+        amount: { type: 'number' },
+        paymentDate: { type: 'string', description: 'YYYY-MM-DD' },
+        paymentType: { type: 'string', enum: ['tuition', 'building_fund', 'registration_fee', 'phone_charge'] },
+        paymentMethod: { type: 'string', description: 'e.g. Check, Cash, Credit Card' },
+        status: { type: 'string', enum: ['paid', 'partial', 'forgiven', 'pending', 'overdue', 'waived'] },
+        notes: { type: 'string' },
+      },
+      required: ['paymentId'],
+    },
+  },
+  {
+    name: 'delete_tuition_payment',
+    description: 'Permanently delete a tuition, building fund, registration fee, or phone charge payment. Look up the payment id first via get_tuition_status (its payments list). Logged — can be undone with undo_last_change, which brings the exact same record back.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        paymentId: { type: 'string' },
+        reason: { type: 'string', description: 'Why this is being deleted — kept in the audit note' },
+      },
+      required: ['paymentId'],
+    },
+  },
+  {
+    name: 'update_donation',
+    description: 'Edit an existing donation. Look up the donation id first via get_donor_summary (its donations list). Only the fields passed are changed. Logged — can be undone with undo_last_change.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        donationId: { type: 'string' },
+        amount: { type: 'number' },
+        donationDate: { type: 'string', description: 'YYYY-MM-DD' },
+        donationMethod: { type: 'string' },
+        purpose: { type: 'string' },
+        category: { type: 'string', enum: ['one_time', 'monthly_recurring', 'event'] },
+        eventId: { type: 'string', description: 'Only relevant when category is "event"' },
+        notes: { type: 'string' },
+      },
+      required: ['donationId'],
+    },
+  },
+  {
+    name: 'delete_donation',
+    description: 'Permanently delete a donation. Look up the donation id first via get_donor_summary (its donations list). Logged — can be undone with undo_last_change, which brings the exact same record back.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        donationId: { type: 'string' },
+        reason: { type: 'string', description: 'Why this is being deleted — kept in the audit note' },
+      },
+      required: ['donationId'],
+    },
+  },
+  {
+    name: 'undo_last_change',
+    description: 'Reverses the assistant\'s most recent not-yet-undone tuition/donation change — restores a just-deleted payment/donation, reverts an edit to its prior values, or removes a payment/donation that was just added. Pass actionId (from list_recent_assistant_actions) to undo a specific earlier change instead of the most recent one.',
+    input_schema: {
+      type: 'object',
+      properties: { actionId: { type: 'string', description: 'Optional — omit to undo the most recent undoable change' } },
+    },
+  },
+  {
+    name: 'redo_last_undo',
+    description: 'Re-applies the assistant\'s most recently undone change — only works on something that was just undone. Pass actionId (from list_recent_assistant_actions) to redo a specific earlier undo instead of the most recent one.',
+    input_schema: {
+      type: 'object',
+      properties: { actionId: { type: 'string', description: 'Optional — omit to redo the most recently undone change' } },
+    },
+  },
 ]
 
 export const ALL_TOOLS = [...READ_ONLY_TOOLS, ...SENSITIVE_TOOLS]
@@ -300,7 +383,8 @@ export async function executeReadOnlyTool(db: Db, name: string, input: Record<st
         .select('id,academic_year,total_amount,yearly_amount,building_fund_amount,status')
         .eq('student_id', studentId).order('academic_year', { ascending: false })
       const { data: payments } = await db.from('tuition_payments')
-        .select('tuition_plan_id,amount,payment_type,payment_date').eq('student_id', studentId)
+        .select('id,tuition_plan_id,amount,payment_type,payment_date,payment_method,status,notes')
+        .eq('student_id', studentId).order('payment_date', { ascending: false })
 
       const plansOut = (plans ?? []).map(plan => {
         const paid = (payments ?? []).filter(p => p.tuition_plan_id === plan.id && p.payment_type !== 'building_fund')
@@ -311,11 +395,15 @@ export async function executeReadOnlyTool(db: Db, name: string, input: Record<st
           charged: money(charged), paid: money(paid), balance: money(charged - paid),
         }
       })
-      const lastPayment = (payments ?? []).sort((a, b) => (b.payment_date ?? '').localeCompare(a.payment_date ?? ''))[0]
+      // Includes each payment's own id — required to target update_tuition_payment /
+      // delete_tuition_payment at a specific record rather than guessing.
       return {
         student: `${student.first_name} ${student.last_name}`,
         plans: plansOut,
-        lastPayment: lastPayment ? { date: lastPayment.payment_date, amount: money(lastPayment.amount), type: lastPayment.payment_type } : null,
+        payments: (payments ?? []).map(p => ({
+          id: p.id, tuitionPlanId: p.tuition_plan_id, date: p.payment_date, amount: money(p.amount),
+          type: p.payment_type, method: p.payment_method, status: p.status, notes: p.notes,
+        })),
       }
     }
 
@@ -331,7 +419,8 @@ export async function executeReadOnlyTool(db: Db, name: string, input: Record<st
       const { data: donor, error: donorError } = await db.from('donors').select('name').eq('id', donorId).single()
       if (donorError || !donor) return { error: 'Donor not found.' }
       const { data: donations } = await db.from('donations')
-        .select('amount,donation_date,category,purpose').eq('donor_id', donorId).order('donation_date', { ascending: false })
+        .select('id,amount,donation_date,category,purpose,notes,donation_method').eq('donor_id', donorId)
+        .order('donation_date', { ascending: false }).limit(500)
 
       const byYear = new Map<string, number>()
       for (const d of donations ?? []) {
@@ -339,12 +428,28 @@ export async function executeReadOnlyTool(db: Db, name: string, input: Record<st
         byYear.set(year, (byYear.get(year) ?? 0) + Number(d.amount ?? 0))
       }
       const total = (donations ?? []).reduce((sum, d) => sum + Number(d.amount ?? 0), 0)
+      // Includes each donation's own id — required to target update_donation /
+      // delete_donation at a specific record rather than guessing. Capped to
+      // the 30 most recent to keep the response compact; totalGiving/
+      // givingByYear above still reflect the full history.
       return {
         donor: donor.name,
         totalGiving: money(total),
         givingByYear: Object.fromEntries([...byYear.entries()].map(([y, v]) => [y, money(v)])),
-        recentDonations: (donations ?? []).slice(0, 5).map(d => ({ date: d.donation_date, amount: money(d.amount), purpose: d.purpose, category: d.category })),
+        donations: (donations ?? []).slice(0, 30).map(d => ({
+          id: d.id, date: d.donation_date, amount: money(d.amount), purpose: d.purpose,
+          category: d.category, method: d.donation_method, notes: d.notes,
+        })),
       }
+    }
+
+    case 'list_recent_assistant_actions': {
+      const limit = Math.max(1, Math.min(Number(input.limit ?? 10) || 10, 50))
+      const { data, error } = await db.from('assistant_actions')
+        .select('id,action_type,table_name,description,created_at,undone_at')
+        .order('created_at', { ascending: false }).limit(limit)
+      if (error) return { error: error.message }
+      return { actions: data }
     }
 
     case 'get_sola_sync_overview': {
@@ -413,7 +518,69 @@ export async function executeReadOnlyTool(db: Db, name: string, input: Record<st
   }
 }
 
-export async function executeSensitiveTool(db: Db, name: string, input: Record<string, unknown>): Promise<unknown> {
+// One row per assistant-caused insert/update/delete on tuition_payments or
+// donations — see the assistant_actions migration. before_data/after_data
+// are full-row snapshots (not diffs) so undo/redo can restore or reapply a
+// record exactly, including bringing a deleted row back with its original id.
+async function logAction(db: Db, params: {
+  performedBy: string | null
+  actionType: 'insert' | 'update' | 'delete'
+  table: string
+  recordId: string
+  beforeData: Record<string, unknown> | null
+  afterData: Record<string, unknown> | null
+  description: string
+}) {
+  await db.from('assistant_actions').insert([{
+    performed_by: params.performedBy, action_type: params.actionType, table_name: params.table,
+    record_id: params.recordId, before_data: params.beforeData, after_data: params.afterData,
+    description: params.description,
+  }])
+}
+
+type ActionRow = {
+  id: string
+  action_type: 'insert' | 'update' | 'delete'
+  table_name: string
+  record_id: string
+  before_data: Record<string, unknown> | null
+  after_data: Record<string, unknown> | null
+  description: string
+}
+
+async function applyUndo(db: Db, action: ActionRow): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (action.action_type === 'insert') {
+    const { error } = await db.from(action.table_name).delete().eq('id', action.record_id)
+    return error ? { ok: false, error: error.message } : { ok: true }
+  }
+  if (action.action_type === 'update') {
+    if (!action.before_data) return { ok: false, error: 'No prior state recorded for this change.' }
+    const { error } = await db.from(action.table_name).update(action.before_data).eq('id', action.record_id)
+    return error ? { ok: false, error: error.message } : { ok: true }
+  }
+  // delete — bring the exact row back, original id included.
+  if (!action.before_data) return { ok: false, error: 'No prior state recorded for this deletion.' }
+  const { error } = await db.from(action.table_name).insert([action.before_data])
+  return error ? { ok: false, error: error.message } : { ok: true }
+}
+
+async function applyRedo(db: Db, action: ActionRow): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (action.action_type === 'insert') {
+    if (!action.after_data) return { ok: false, error: 'No recorded data to re-insert.' }
+    const { error } = await db.from(action.table_name).insert([action.after_data])
+    return error ? { ok: false, error: error.message } : { ok: true }
+  }
+  if (action.action_type === 'update') {
+    if (!action.after_data) return { ok: false, error: 'No recorded data to re-apply.' }
+    const { error } = await db.from(action.table_name).update(action.after_data).eq('id', action.record_id)
+    return error ? { ok: false, error: error.message } : { ok: true }
+  }
+  // delete
+  const { error } = await db.from(action.table_name).delete().eq('id', action.record_id)
+  return error ? { ok: false, error: error.message } : { ok: true }
+}
+
+export async function executeSensitiveTool(db: Db, name: string, input: Record<string, unknown>, userId: string | null): Promise<unknown> {
   switch (name) {
     case 'send_email': {
       const to = Array.isArray(input.to) ? input.to.map(String) : []
@@ -430,9 +597,51 @@ export async function executeSensitiveTool(db: Db, name: string, input: Record<s
         donation_date: input.donationDate ?? null, purpose: input.purpose ?? null, notes: input.notes ?? null,
         category: input.category ?? 'one_time', event_id: input.category === 'event' ? (input.eventId ?? null) : null,
         source: 'manual',
-      }]).select('id').single()
+      }]).select('*').single()
       if (error) return { error: error.message }
+      await logAction(db, {
+        performedBy: userId, actionType: 'insert', table: 'donations', recordId: data.id,
+        beforeData: null, afterData: data, description: `Recorded a ${money(data.amount)} donation (${data.donation_date})`,
+      })
       return { success: true, donationId: data.id }
+    }
+
+    case 'update_donation': {
+      const donationId = String(input.donationId ?? '')
+      const { data: before, error: fetchError } = await db.from('donations').select('*').eq('id', donationId).single()
+      if (fetchError || !before) return { error: 'Donation not found.' }
+      const patch: Record<string, unknown> = {}
+      if (input.amount !== undefined) patch.amount = Number(input.amount)
+      if (input.donationDate !== undefined) patch.donation_date = input.donationDate
+      if (input.donationMethod !== undefined) patch.donation_method = input.donationMethod
+      if (input.purpose !== undefined) patch.purpose = input.purpose
+      if (input.category !== undefined) {
+        patch.category = input.category
+        patch.event_id = input.category === 'event' ? (input.eventId ?? before.event_id ?? null) : null
+      }
+      if (input.notes !== undefined) patch.notes = input.notes
+      if (!Object.keys(patch).length) return { error: 'No changes provided.' }
+      const { data: after, error } = await db.from('donations').update(patch).eq('id', donationId).select('*').single()
+      if (error) return { error: error.message }
+      await logAction(db, {
+        performedBy: userId, actionType: 'update', table: 'donations', recordId: donationId,
+        beforeData: before, afterData: after, description: `Edited a ${money(before.amount)} donation (${before.donation_date})`,
+      })
+      return { success: true, donationId }
+    }
+
+    case 'delete_donation': {
+      const donationId = String(input.donationId ?? '')
+      const { data: before, error: fetchError } = await db.from('donations').select('*').eq('id', donationId).single()
+      if (fetchError || !before) return { error: 'Donation not found.' }
+      const { error } = await db.from('donations').delete().eq('id', donationId)
+      if (error) return { error: error.message }
+      await logAction(db, {
+        performedBy: userId, actionType: 'delete', table: 'donations', recordId: donationId,
+        beforeData: before, afterData: null,
+        description: `Deleted a ${money(before.amount)} donation (${before.donation_date})${input.reason ? ` — ${input.reason}` : ''}`,
+      })
+      return { success: true, deleted: true }
     }
 
     case 'add_donor': {
@@ -453,9 +662,49 @@ export async function executeSensitiveTool(db: Db, name: string, input: Record<s
         tuition_plan_id: perPlan ? input.tuitionPlanId : null, student_id: input.studentId,
         amount: Number(input.amount ?? 0), payment_date: input.paymentDate ?? null, status: 'paid',
         payment_type: paymentType, payment_method: input.paymentMethod ?? null, notes: input.notes ?? null,
-      }]).select('id').single()
+      }]).select('*').single()
       if (error) return { error: error.message }
+      await logAction(db, {
+        performedBy: userId, actionType: 'insert', table: 'tuition_payments', recordId: data.id,
+        beforeData: null, afterData: data, description: `Recorded a ${money(data.amount)} ${paymentType} payment (${data.payment_date})`,
+      })
       return { success: true, tuitionPaymentId: data.id }
+    }
+
+    case 'update_tuition_payment': {
+      const paymentId = String(input.paymentId ?? '')
+      const { data: before, error: fetchError } = await db.from('tuition_payments').select('*').eq('id', paymentId).single()
+      if (fetchError || !before) return { error: 'Tuition payment not found.' }
+      const patch: Record<string, unknown> = {}
+      if (input.amount !== undefined) patch.amount = Number(input.amount)
+      if (input.paymentDate !== undefined) patch.payment_date = input.paymentDate
+      if (input.paymentType !== undefined) patch.payment_type = input.paymentType
+      if (input.paymentMethod !== undefined) patch.payment_method = input.paymentMethod
+      if (input.status !== undefined) patch.status = input.status
+      if (input.notes !== undefined) patch.notes = input.notes
+      if (!Object.keys(patch).length) return { error: 'No changes provided.' }
+      const { data: after, error } = await db.from('tuition_payments').update(patch).eq('id', paymentId).select('*').single()
+      if (error) return { error: error.message }
+      await logAction(db, {
+        performedBy: userId, actionType: 'update', table: 'tuition_payments', recordId: paymentId,
+        beforeData: before, afterData: after,
+        description: `Edited a ${money(before.amount)} ${before.payment_type} payment (${before.payment_date})`,
+      })
+      return { success: true, tuitionPaymentId: paymentId }
+    }
+
+    case 'delete_tuition_payment': {
+      const paymentId = String(input.paymentId ?? '')
+      const { data: before, error: fetchError } = await db.from('tuition_payments').select('*').eq('id', paymentId).single()
+      if (fetchError || !before) return { error: 'Tuition payment not found.' }
+      const { error } = await db.from('tuition_payments').delete().eq('id', paymentId)
+      if (error) return { error: error.message }
+      await logAction(db, {
+        performedBy: userId, actionType: 'delete', table: 'tuition_payments', recordId: paymentId,
+        beforeData: before, afterData: null,
+        description: `Deleted a ${money(before.amount)} ${before.payment_type} payment (${before.payment_date})${input.reason ? ` — ${input.reason}` : ''}`,
+      })
+      return { success: true, deleted: true }
     }
 
     case 'add_student': {
@@ -503,6 +752,30 @@ export async function executeSensitiveTool(db: Db, name: string, input: Record<s
       }]).select('id').single()
       if (error) return { error: error.message }
       return { success: true, pledgePaymentId: data.id }
+    }
+
+    case 'undo_last_change': {
+      let query = db.from('assistant_actions').select('*').is('undone_at', null)
+      if (input.actionId) query = query.eq('id', String(input.actionId))
+      const { data: action, error } = await query.order('created_at', { ascending: false }).limit(1).maybeSingle()
+      if (error) return { error: error.message }
+      if (!action) return { error: 'Nothing to undo.' }
+      const result = await applyUndo(db, action as ActionRow)
+      if (!result.ok) return { error: result.error }
+      await db.from('assistant_actions').update({ undone_at: new Date().toISOString() }).eq('id', action.id)
+      return { success: true, undone: action.description }
+    }
+
+    case 'redo_last_undo': {
+      let query = db.from('assistant_actions').select('*').not('undone_at', 'is', null)
+      if (input.actionId) query = query.eq('id', String(input.actionId))
+      const { data: action, error } = await query.order('undone_at', { ascending: false }).limit(1).maybeSingle()
+      if (error) return { error: error.message }
+      if (!action) return { error: 'Nothing to redo.' }
+      const result = await applyRedo(db, action as ActionRow)
+      if (!result.ok) return { error: result.error }
+      await db.from('assistant_actions').update({ undone_at: null }).eq('id', action.id)
+      return { success: true, redone: action.description }
     }
 
     default:

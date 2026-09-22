@@ -162,14 +162,25 @@ function AssistantBubble({ text }: { text: string }) {
 // card. Anything not listed here (a future tool, or one we forgot to add)
 // still gets a safe generic fallback below rather than being silently
 // unrenderable — approving stays possible even for an "unforeseen" tool.
-const CONFIRM_LABELS: Record<string, { title: string; fields: [string, string][] }> = {
+// `danger` swaps the card to a red delete-style treatment instead of the
+// normal amber "about to write something" one — reserved for the two
+// tools that permanently remove a record (recoverable via undo, but that's
+// not obvious from the confirmation moment itself, so it should still read
+// as more consequential than a normal add/edit).
+const CONFIRM_LABELS: Record<string, { title: string; fields: [string, string][]; danger?: boolean }> = {
   record_donation: { title: 'Record this donation?', fields: [['donorId', 'Donor'], ['amount', 'Amount'], ['donationDate', 'Date'], ['donationMethod', 'Method'], ['purpose', 'Purpose'], ['category', 'Category'], ['notes', 'Notes']] },
+  update_donation: { title: 'Save these changes to the donation?', fields: [['donationId', 'Donation'], ['amount', 'New amount'], ['donationDate', 'New date'], ['donationMethod', 'New method'], ['purpose', 'New purpose'], ['category', 'New category'], ['notes', 'New notes']] },
+  delete_donation: { title: 'Permanently delete this donation?', fields: [['donationId', 'Donation'], ['reason', 'Reason']], danger: true },
   add_donor: { title: 'Create this donor?', fields: [['name', 'Name'], ['email', 'Email'], ['phoneNumber', 'Phone'], ['address', 'Address'], ['category', 'Category'], ['relationship', 'Relationship']] },
   record_tuition_payment: { title: 'Record this payment?', fields: [['studentId', 'Student'], ['paymentType', 'Type'], ['amount', 'Amount'], ['paymentDate', 'Date'], ['paymentMethod', 'Method'], ['notes', 'Notes']] },
+  update_tuition_payment: { title: 'Save these changes to the payment?', fields: [['paymentId', 'Payment'], ['amount', 'New amount'], ['paymentDate', 'New date'], ['paymentType', 'New type'], ['paymentMethod', 'New method'], ['status', 'New status'], ['notes', 'New notes']] },
+  delete_tuition_payment: { title: 'Permanently delete this payment?', fields: [['paymentId', 'Payment'], ['reason', 'Reason']], danger: true },
   add_student: { title: 'Create this student record?', fields: [['firstName', 'First name'], ['lastName', 'Last name'], ['gradeLevel', 'Grade'], ['status', 'Status'], ['enrollmentDate', 'Enrollment date'], ['fatherName', 'Father'], ['motherName', 'Mother']] },
   log_expense: { title: 'Log this expense?', fields: [['date', 'Date'], ['category', 'Category'], ['description', 'Description'], ['amount', 'Amount'], ['vendor', 'Vendor'], ['paymentMethod', 'Method']] },
   add_pledge: { title: 'Create this pledge?', fields: [['donorId', 'Donor'], ['amount', 'Amount'], ['pledgeDate', 'Pledge date'], ['dueDate', 'Due date'], ['purpose', 'Purpose']] },
   record_pledge_payment: { title: 'Record this pledge payment?', fields: [['pledgeId', 'Pledge'], ['amount', 'Amount'], ['paymentDate', 'Date'], ['paymentMethod', 'Method']] },
+  undo_last_change: { title: 'Undo this change?', fields: [['actionId', 'Specific action']] },
+  redo_last_undo: { title: 'Redo this undone change?', fields: [['actionId', 'Specific action']] },
 }
 
 function ConfirmCard({ pending, onConfirm, disabled }: { pending: PendingConfirmation; onConfirm: (approved: boolean) => void; disabled: boolean }) {
@@ -190,15 +201,21 @@ function ConfirmCard({ pending, onConfirm, disabled }: { pending: PendingConfirm
 
   const config = CONFIRM_LABELS[pending.name]
   if (config) {
+    const shownFields = config.fields.filter(([key]) => pending.input[key] != null && pending.input[key] !== '')
     return (
-      <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-xs space-y-2">
-        <p className="font-medium text-amber-800">{config.title}</p>
-        <div className="bg-white rounded-lg p-2.5 space-y-1 text-slate-700">
-          {config.fields.filter(([key]) => pending.input[key] != null && pending.input[key] !== '').map(([key, label]) => (
-            <p key={key}><span className="text-slate-400">{label}:</span> {String(pending.input[key])}</p>
-          ))}
-        </div>
-        <Actions onConfirm={onConfirm} disabled={disabled} />
+      <div className={`border rounded-xl p-3 text-xs space-y-2 ${config.danger ? 'border-red-300 bg-red-50' : 'border-amber-300 bg-amber-50'}`}>
+        <p className={`font-medium ${config.danger ? 'text-red-800' : 'text-amber-800'}`}>{config.title}</p>
+        {shownFields.length > 0 && (
+          <div className="bg-white rounded-lg p-2.5 space-y-1 text-slate-700">
+            {shownFields.map(([key, label]) => (
+              <p key={key}><span className="text-slate-400">{label}:</span> {String(pending.input[key])}</p>
+            ))}
+          </div>
+        )}
+        {!shownFields.length && (pending.name === 'undo_last_change' || pending.name === 'redo_last_undo') && (
+          <p className="text-slate-500">Applies to the most recent {pending.name === 'undo_last_change' ? 'undoable' : 'undone'} change.</p>
+        )}
+        <Actions onConfirm={onConfirm} disabled={disabled} danger={config.danger} />
       </div>
     )
   }
@@ -212,14 +229,14 @@ function ConfirmCard({ pending, onConfirm, disabled }: { pending: PendingConfirm
   )
 }
 
-function Actions({ onConfirm, disabled }: { onConfirm: (approved: boolean) => void; disabled: boolean }) {
+function Actions({ onConfirm, disabled, danger }: { onConfirm: (approved: boolean) => void; disabled: boolean; danger?: boolean }) {
   return (
     <div className="flex gap-2 pt-1">
-      <button onClick={() => onConfirm(true)} disabled={disabled} className="bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40">
-        Approve & Send
+      <button onClick={() => onConfirm(true)} disabled={disabled} className={`text-white rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40 ${danger ? 'bg-red-600' : 'bg-blue-600'}`}>
+        {danger ? 'Delete' : 'Approve'}
       </button>
       <button onClick={() => onConfirm(false)} disabled={disabled} className="bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-medium disabled:opacity-40">
-        Decline
+        {danger ? 'Cancel' : 'Decline'}
       </button>
     </div>
   )
