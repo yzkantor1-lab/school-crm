@@ -163,8 +163,8 @@ function AssistantBubble({ text }: { text: string }) {
 // still gets a safe generic fallback below rather than being silently
 // unrenderable — approving stays possible even for an "unforeseen" tool.
 // `danger` swaps the card to a red delete-style treatment instead of the
-// normal amber "about to write something" one — reserved for the two
-// tools that permanently remove a record (recoverable via undo, but that's
+// normal amber "about to write something" one — reserved for the tools
+// that permanently remove a record (recoverable via undo, but that's
 // not obvious from the confirmation moment itself, so it should still read
 // as more consequential than a normal add/edit).
 const CONFIRM_LABELS: Record<string, { title: string; fields: [string, string][]; danger?: boolean }> = {
@@ -172,6 +172,7 @@ const CONFIRM_LABELS: Record<string, { title: string; fields: [string, string][]
   update_donation: { title: 'Save these changes to the donation?', fields: [['donationId', 'Donation'], ['amount', 'New amount'], ['donationDate', 'New date'], ['donationMethod', 'New method'], ['purpose', 'New purpose'], ['category', 'New category'], ['notes', 'New notes']] },
   delete_donation: { title: 'Permanently delete this donation?', fields: [['donationId', 'Donation'], ['reason', 'Reason']], danger: true },
   add_donor: { title: 'Create this donor?', fields: [['name', 'Name'], ['email', 'Email'], ['phoneNumber', 'Phone'], ['address', 'Address'], ['category', 'Category'], ['relationship', 'Relationship']] },
+  update_donor: { title: 'Save these changes to the donor?', fields: [['donorId', 'Donor'], ['name', 'New name'], ['title', 'New title'], ['email', 'New email'], ['phoneNumber', 'New phone'], ['address', 'New address'], ['category', 'New category'], ['relationship', 'New relationship']] },
   record_tuition_payment: { title: 'Record this payment?', fields: [['studentId', 'Student'], ['paymentType', 'Type'], ['amount', 'Amount'], ['paymentDate', 'Date'], ['paymentMethod', 'Method'], ['notes', 'Notes']] },
   update_tuition_payment: { title: 'Save these changes to the payment?', fields: [['paymentId', 'Payment'], ['amount', 'New amount'], ['paymentDate', 'New date'], ['paymentType', 'New type'], ['paymentMethod', 'New method'], ['status', 'New status'], ['notes', 'New notes']] },
   delete_tuition_payment: { title: 'Permanently delete this payment?', fields: [['paymentId', 'Payment'], ['reason', 'Reason']], danger: true },
@@ -179,6 +180,12 @@ const CONFIRM_LABELS: Record<string, { title: string; fields: [string, string][]
   log_expense: { title: 'Log this expense?', fields: [['date', 'Date'], ['category', 'Category'], ['description', 'Description'], ['amount', 'Amount'], ['vendor', 'Vendor'], ['paymentMethod', 'Method']] },
   add_pledge: { title: 'Create this pledge?', fields: [['donorId', 'Donor'], ['amount', 'Amount'], ['pledgeDate', 'Pledge date'], ['dueDate', 'Due date'], ['purpose', 'Purpose']] },
   record_pledge_payment: { title: 'Record this pledge payment?', fields: [['pledgeId', 'Pledge'], ['amount', 'Amount'], ['paymentDate', 'Date'], ['paymentMethod', 'Method']] },
+  update_expense: { title: 'Save these changes to the expense?', fields: [['expenseId', 'Expense'], ['amount', 'New amount'], ['date', 'New date'], ['category', 'New category'], ['description', 'New description'], ['vendor', 'New vendor'], ['paymentMethod', 'New method'], ['notes', 'New notes']] },
+  delete_expense: { title: 'Permanently delete this expense?', fields: [['expenseId', 'Expense'], ['reason', 'Reason']], danger: true },
+  update_pledge: { title: 'Save these changes to the pledge?', fields: [['pledgeId', 'Pledge'], ['amount', 'New amount'], ['pledgeDate', 'New pledge date'], ['dueDate', 'New due date'], ['purpose', 'New purpose'], ['notes', 'New notes']] },
+  delete_pledge: { title: 'Permanently delete this pledge?', fields: [['pledgeId', 'Pledge'], ['reason', 'Reason']], danger: true },
+  update_pledge_payment: { title: 'Save these changes to the pledge payment?', fields: [['pledgePaymentId', 'Pledge payment'], ['amount', 'New amount'], ['paymentDate', 'New date'], ['paymentMethod', 'New method'], ['notes', 'New notes']] },
+  delete_pledge_payment: { title: 'Permanently delete this pledge payment?', fields: [['pledgePaymentId', 'Pledge payment'], ['reason', 'Reason']], danger: true },
   undo_last_change: { title: 'Undo this change?', fields: [['actionId', 'Specific action']] },
   redo_last_undo: { title: 'Redo this undone change?', fields: [['actionId', 'Specific action']] },
 }

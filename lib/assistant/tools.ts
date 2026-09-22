@@ -1,6 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendMailViaGoogle } from '@/lib/email'
+import { recomputePledgeTotals } from '@/lib/pledges'
 
 type Db = SupabaseClient
 
@@ -75,7 +76,7 @@ export const READ_ONLY_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'get_donor_summary',
-    description: "Get a donor's total giving, giving by year, and most recent donations.",
+    description: "Get a donor's total giving, giving by year, most recent donations, and pledges (each with its payments).",
     input_schema: {
       type: 'object',
       properties: { donorId: { type: 'string', description: 'Donor id from search_donor' } },
@@ -89,7 +90,7 @@ export const READ_ONLY_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'list_recent_assistant_actions',
-    description: 'List the assistant\'s own recent tuition/donation changes (inserts, edits, deletes) with their ids, most recent first, including which are already undone. Use this when the staff member asks "what did you just do", "undo that", or "redo it" without naming a specific record — it tells you which action id to pass to undo_last_change / redo_last_undo.',
+    description: 'List the assistant\'s own recent logged changes (inserts, edits, deletes of tuition payments, donations, donors, expenses, pledges, pledge payments) with their ids, most recent first, including which are already undone. Use this when the staff member asks "what did you just do", "undo that", or "redo it" without naming a specific record — it tells you which action id to pass to undo_last_change / redo_last_undo.',
     input_schema: {
       type: 'object',
       properties: { limit: { type: 'number', description: 'default 10, max 50' } },
@@ -189,6 +190,24 @@ export const SENSITIVE_TOOLS: Anthropic.Tool[] = [
         title: { type: 'string', description: 'e.g. Mr. & Mrs.' },
       },
       required: ['name', 'category', 'relationship'],
+    },
+  },
+  {
+    name: 'update_donor',
+    description: 'Edit an existing donor\'s name, title, or contact details (email, phone, address) or their category/relationship. Look up the donor id first with search_donor. Only the fields passed are changed. Logged — can be undone with undo_last_change.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        donorId: { type: 'string' },
+        name: { type: 'string' },
+        title: { type: 'string', description: 'e.g. Mr. & Mrs.' },
+        email: { type: 'string' },
+        phoneNumber: { type: 'string' },
+        address: { type: 'string' },
+        category: { type: 'string' },
+        relationship: { type: 'string' },
+      },
+      required: ['donorId'],
     },
   },
   {
@@ -339,8 +358,93 @@ export const SENSITIVE_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'update_expense',
+    description: 'Edit an existing expense. Look up the expense id first via run_report on the expenses table. Only the fields passed are changed. Logged — can be undone with undo_last_change.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        expenseId: { type: 'string' },
+        date: { type: 'string', description: 'YYYY-MM-DD' },
+        category: { type: 'string' },
+        description: { type: 'string' },
+        amount: { type: 'number' },
+        vendor: { type: 'string' },
+        paymentMethod: { type: 'string' },
+        notes: { type: 'string' },
+      },
+      required: ['expenseId'],
+    },
+  },
+  {
+    name: 'delete_expense',
+    description: 'Permanently delete an expense. Look up the expense id first via run_report on the expenses table. Logged — can be undone with undo_last_change, which brings the exact same record back.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        expenseId: { type: 'string' },
+        reason: { type: 'string', description: 'Why this is being deleted — kept in the audit note' },
+      },
+      required: ['expenseId'],
+    },
+  },
+  {
+    name: 'update_pledge',
+    description: 'Edit an existing pledge\'s terms. Look up the pledge id first via get_donor_summary (its pledges list). Only the fields passed are changed; the amount paid is always derived from the pledge\'s payments and can\'t be set directly. Logged — can be undone with undo_last_change.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pledgeId: { type: 'string' },
+        amount: { type: 'number' },
+        pledgeDate: { type: 'string', description: 'YYYY-MM-DD' },
+        dueDate: { type: 'string', description: 'YYYY-MM-DD' },
+        purpose: { type: 'string' },
+        notes: { type: 'string' },
+      },
+      required: ['pledgeId'],
+    },
+  },
+  {
+    name: 'delete_pledge',
+    description: 'Permanently delete a pledge. Only allowed once it has no payments recorded against it — delete those first with delete_pledge_payment. Look up the pledge id first via get_donor_summary (its pledges list). Logged — can be undone with undo_last_change.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pledgeId: { type: 'string' },
+        reason: { type: 'string', description: 'Why this is being deleted — kept in the audit note' },
+      },
+      required: ['pledgeId'],
+    },
+  },
+  {
+    name: 'update_pledge_payment',
+    description: 'Edit an existing pledge payment. Look up the payment id first via get_donor_summary (each pledge\'s payments list). Only the fields passed are changed. Logged — can be undone with undo_last_change.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pledgePaymentId: { type: 'string' },
+        amount: { type: 'number' },
+        paymentDate: { type: 'string', description: 'YYYY-MM-DD' },
+        paymentMethod: { type: 'string' },
+        notes: { type: 'string' },
+      },
+      required: ['pledgePaymentId'],
+    },
+  },
+  {
+    name: 'delete_pledge_payment',
+    description: 'Permanently delete a pledge payment. Look up the payment id first via get_donor_summary (each pledge\'s payments list). Logged — can be undone with undo_last_change, which brings the exact same record back.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pledgePaymentId: { type: 'string' },
+        reason: { type: 'string', description: 'Why this is being deleted — kept in the audit note' },
+      },
+      required: ['pledgePaymentId'],
+    },
+  },
+  {
     name: 'undo_last_change',
-    description: 'Reverses the assistant\'s most recent not-yet-undone tuition/donation change — restores a just-deleted payment/donation, reverts an edit to its prior values, or removes a payment/donation that was just added. Pass actionId (from list_recent_assistant_actions) to undo a specific earlier change instead of the most recent one.',
+    description: 'Reverses the assistant\'s most recent not-yet-undone change to a tuition payment, donation, donor, expense, pledge, or pledge payment — restores a just-deleted record, reverts an edit to its prior values, or removes a record that was just added. Pass actionId (from list_recent_assistant_actions) to undo a specific earlier change instead of the most recent one.',
     input_schema: {
       type: 'object',
       properties: { actionId: { type: 'string', description: 'Optional — omit to undo the most recent undoable change' } },
@@ -427,6 +531,9 @@ export async function executeReadOnlyTool(db: Db, name: string, input: Record<st
         const year = (d.donation_date ?? '').slice(0, 4) || 'unknown'
         byYear.set(year, (byYear.get(year) ?? 0) + Number(d.amount ?? 0))
       }
+      const { data: pledges } = await db.from('pledges')
+        .select('id,amount,amount_paid,pledge_date,due_date,purpose,fulfilled,notes,pledge_payments(id,amount,payment_date,payment_method,notes)')
+        .eq('donor_id', donorId).order('pledge_date', { ascending: false })
       const total = (donations ?? []).reduce((sum, d) => sum + Number(d.amount ?? 0), 0)
       // Includes each donation's own id — required to target update_donation /
       // delete_donation at a specific record rather than guessing. Capped to
@@ -439,6 +546,16 @@ export async function executeReadOnlyTool(db: Db, name: string, input: Record<st
         donations: (donations ?? []).slice(0, 30).map(d => ({
           id: d.id, date: d.donation_date, amount: money(d.amount), purpose: d.purpose,
           category: d.category, method: d.donation_method, notes: d.notes,
+        })),
+        // Ids here are what update_pledge / delete_pledge / update_pledge_payment /
+        // delete_pledge_payment target.
+        pledges: (pledges ?? []).map(p => ({
+          id: p.id, pledgeDate: p.pledge_date, dueDate: p.due_date, purpose: p.purpose, notes: p.notes,
+          amount: money(p.amount), paid: money(p.amount_paid), balance: money(Number(p.amount) - Number(p.amount_paid)),
+          fulfilled: p.fulfilled,
+          payments: (p.pledge_payments ?? []).map(pp => ({
+            id: pp.id, date: pp.payment_date, amount: money(pp.amount), method: pp.payment_method, notes: pp.notes,
+          })),
         })),
       }
     }
@@ -548,8 +665,46 @@ type ActionRow = {
   description: string
 }
 
+// Child rows that would be cascade-deleted along with a parent record (or
+// that would make the delete fail outright). Removing a parent that has any
+// is refused — both for a direct delete tool and for an undo/redo that
+// amounts to a delete — because the undo log only snapshots the parent row
+// itself, so those children could never be brought back.
+const DEPENDENTS: Record<string, [table: string, column: string][]> = {
+  pledges: [['pledge_payments', 'pledge_id']],
+  donors: [
+    ['donations', 'donor_id'], ['pledges', 'donor_id'], ['recurring_donations', 'donor_id'],
+    ['donor_students', 'donor_id'], ['donor_documents', 'donor_id'], ['custom_payment_calendars', 'donor_id'],
+    ['merge_documents', 'donor_id'], ['payment_methods', 'donor_id'], ['payment_schedules', 'donor_id'],
+    ['payment_transactions', 'donor_id'], ['communications', 'donor_id'],
+  ],
+}
+
+async function dependentsBlockingRemoval(db: Db, table: string, id: string): Promise<string | null> {
+  const found: string[] = []
+  for (const [child, column] of DEPENDENTS[table] ?? []) {
+    const { count, error } = await db.from(child).select(column, { count: 'exact', head: true }).eq(column, id)
+    if (error) return `Couldn't check ${child} before removing this record: ${error.message}`
+    if (count) found.push(`${count} ${child.replace(/_/g, ' ')}`)
+  }
+  return found.length ? `This record still has ${found.join(', ')} attached, which would be permanently lost along with it. Remove or reassign those first.` : null
+}
+
+// Undo/redo can change either side of the pledge <-> payments relationship,
+// so re-derive the pledge's totals afterward (see recomputePledgeTotals).
+async function afterRestore(db: Db, action: ActionRow) {
+  if (action.table_name === 'pledge_payments') {
+    const pledgeId = (action.after_data ?? action.before_data)?.pledge_id
+    if (typeof pledgeId === 'string') await recomputePledgeTotals(db, pledgeId)
+  } else if (action.table_name === 'pledges') {
+    await recomputePledgeTotals(db, action.record_id)
+  }
+}
+
 async function applyUndo(db: Db, action: ActionRow): Promise<{ ok: true } | { ok: false; error: string }> {
   if (action.action_type === 'insert') {
+    const blocked = await dependentsBlockingRemoval(db, action.table_name, action.record_id)
+    if (blocked) return { ok: false, error: blocked }
     const { error } = await db.from(action.table_name).delete().eq('id', action.record_id)
     return error ? { ok: false, error: error.message } : { ok: true }
   }
@@ -576,8 +731,44 @@ async function applyRedo(db: Db, action: ActionRow): Promise<{ ok: true } | { ok
     return error ? { ok: false, error: error.message } : { ok: true }
   }
   // delete
+  const blocked = await dependentsBlockingRemoval(db, action.table_name, action.record_id)
+  if (blocked) return { ok: false, error: blocked }
   const { error } = await db.from(action.table_name).delete().eq('id', action.record_id)
   return error ? { ok: false, error: error.message } : { ok: true }
+}
+
+// Shared body of the update_* / delete_* tools below: snapshot the row,
+// apply the change, and log it so undo_last_change can reverse it.
+async function updateLogged(db: Db, userId: string | null, table: string, id: string, patch: Record<string, unknown>,
+  describe: (before: Record<string, unknown>) => string): Promise<{ ok: true; before: Record<string, unknown> } | { ok: false; error: string }> {
+  const { data: before, error: fetchError } = await db.from(table).select('*').eq('id', id).single()
+  if (fetchError || !before) return { ok: false, error: 'Record not found.' }
+  if (!Object.keys(patch).length) return { ok: false, error: 'No changes provided.' }
+  const { data: after, error } = await db.from(table).update(patch).eq('id', id).select('*').single()
+  if (error) return { ok: false, error: error.message }
+  await logAction(db, { performedBy: userId, actionType: 'update', table, recordId: id, beforeData: before, afterData: after, description: describe(before) })
+  return { ok: true, before }
+}
+
+async function deleteLogged(db: Db, userId: string | null, table: string, id: string, reason: unknown,
+  describe: (before: Record<string, unknown>) => string): Promise<{ ok: true; before: Record<string, unknown> } | { ok: false; error: string }> {
+  const { data: before, error: fetchError } = await db.from(table).select('*').eq('id', id).single()
+  if (fetchError || !before) return { ok: false, error: 'Record not found.' }
+  const blocked = await dependentsBlockingRemoval(db, table, id)
+  if (blocked) return { ok: false, error: blocked }
+  const { error } = await db.from(table).delete().eq('id', id)
+  if (error) return { ok: false, error: error.message }
+  await logAction(db, {
+    performedBy: userId, actionType: 'delete', table, recordId: id, beforeData: before, afterData: null,
+    description: `${describe(before)}${reason ? ` — ${reason}` : ''}`,
+  })
+  return { ok: true, before }
+}
+
+function pick(input: Record<string, unknown>, mapping: [inputKey: string, column: string, numeric?: boolean][]) {
+  const patch: Record<string, unknown> = {}
+  for (const [key, column, numeric] of mapping) if (input[key] !== undefined) patch[column] = numeric ? Number(input[key]) : input[key]
+  return patch
 }
 
 export async function executeSensitiveTool(db: Db, name: string, input: Record<string, unknown>, userId: string | null): Promise<unknown> {
@@ -649,9 +840,21 @@ export async function executeSensitiveTool(db: Db, name: string, input: Record<s
         name: input.name, email: input.email ?? null, address: input.address ?? null,
         phone_number: input.phoneNumber ?? null, category: input.category, relationship: input.relationship,
         title: input.title ?? null,
-      }]).select('id').single()
+      }]).select('*').single()
       if (error) return { error: error.message }
+      await logAction(db, {
+        performedBy: userId, actionType: 'insert', table: 'donors', recordId: data.id,
+        beforeData: null, afterData: data, description: `Added donor ${data.name}`,
+      })
       return { success: true, donorId: data.id }
+    }
+
+    case 'update_donor': {
+      const result = await updateLogged(db, userId, 'donors', String(input.donorId ?? ''),
+        pick(input, [['name', 'name'], ['title', 'title'], ['email', 'email'], ['phoneNumber', 'phone_number'],
+          ['address', 'address'], ['category', 'category'], ['relationship', 'relationship']]),
+        b => `Edited donor ${b.name}`)
+      return result.ok ? { success: true, donorId: input.donorId } : { error: result.error }
     }
 
     case 'record_tuition_payment': {
@@ -731,27 +934,94 @@ export async function executeSensitiveTool(db: Db, name: string, input: Record<s
       const { data, error } = await db.from('expenses').insert([{
         date: input.date, category: input.category, description: input.description, amount: Number(input.amount ?? 0),
         vendor: input.vendor ?? null, payment_method: input.paymentMethod ?? 'Cash', notes: input.notes ?? null,
-      }]).select('id').single()
+        created_by: userId,
+      }]).select('*').single()
       if (error) return { error: error.message }
+      await logAction(db, {
+        performedBy: userId, actionType: 'insert', table: 'expenses', recordId: data.id,
+        beforeData: null, afterData: data, description: `Logged a ${money(data.amount)} expense — ${data.description} (${data.date})`,
+      })
       return { success: true, expenseId: data.id }
     }
 
+    case 'update_expense': {
+      const result = await updateLogged(db, userId, 'expenses', String(input.expenseId ?? ''), {
+        ...pick(input, [['date', 'date'], ['category', 'category'], ['description', 'description'], ['amount', 'amount', true],
+          ['vendor', 'vendor'], ['paymentMethod', 'payment_method'], ['notes', 'notes']]),
+        updated_at: new Date().toISOString(),
+      }, b => `Edited a ${money(b.amount as number)} expense — ${b.description} (${b.date})`)
+      return result.ok ? { success: true, expenseId: input.expenseId } : { error: result.error }
+    }
+
+    case 'delete_expense': {
+      const result = await deleteLogged(db, userId, 'expenses', String(input.expenseId ?? ''), input.reason,
+        b => `Deleted a ${money(b.amount as number)} expense — ${b.description} (${b.date})`)
+      return result.ok ? { success: true, deleted: true } : { error: result.error }
+    }
+
     case 'add_pledge': {
-      const { data, error } = await db.from('pledges').insert([{
+      // Single-object insert (not an array) so an omitted pledge_date is left
+      // out entirely and gets the column default — in an array insert an
+      // undefined key becomes an explicit null and violates NOT NULL.
+      const { data, error } = await db.from('pledges').insert({
         donor_id: input.donorId, amount: Number(input.amount ?? 0), pledge_date: input.pledgeDate ?? undefined,
         due_date: input.dueDate ?? null, purpose: input.purpose ?? null, notes: input.notes ?? null,
-      }]).select('id').single()
+      }).select('*').single()
       if (error) return { error: error.message }
+      await logAction(db, {
+        performedBy: userId, actionType: 'insert', table: 'pledges', recordId: data.id,
+        beforeData: null, afterData: data, description: `Added a ${money(data.amount)} pledge (${data.pledge_date})`,
+      })
       return { success: true, pledgeId: data.id }
     }
 
+    case 'update_pledge': {
+      const pledgeId = String(input.pledgeId ?? '')
+      const patch = pick(input, [['amount', 'amount', true], ['pledgeDate', 'pledge_date'], ['dueDate', 'due_date'], ['purpose', 'purpose'], ['notes', 'notes']])
+      const result = await updateLogged(db, userId, 'pledges', pledgeId,
+        Object.keys(patch).length ? { ...patch, updated_at: new Date().toISOString() } : patch,
+        b => `Edited a ${money(b.amount as number)} pledge (${b.pledge_date})`)
+      if (!result.ok) return { error: result.error }
+      await recomputePledgeTotals(db, pledgeId)
+      return { success: true, pledgeId }
+    }
+
+    case 'delete_pledge': {
+      const result = await deleteLogged(db, userId, 'pledges', String(input.pledgeId ?? ''), input.reason,
+        b => `Deleted a ${money(b.amount as number)} pledge (${b.pledge_date})`)
+      return result.ok ? { success: true, deleted: true } : { error: result.error }
+    }
+
     case 'record_pledge_payment': {
-      const { data, error } = await db.from('pledge_payments').insert([{
+      // Single-object insert for the same omitted-date reason as add_pledge.
+      const { data, error } = await db.from('pledge_payments').insert({
         pledge_id: input.pledgeId, amount: Number(input.amount ?? 0), payment_date: input.paymentDate ?? undefined,
         payment_method: input.paymentMethod ?? 'Cash', notes: input.notes ?? null,
-      }]).select('id').single()
+      }).select('*').single()
       if (error) return { error: error.message }
+      await recomputePledgeTotals(db, data.pledge_id)
+      await logAction(db, {
+        performedBy: userId, actionType: 'insert', table: 'pledge_payments', recordId: data.id,
+        beforeData: null, afterData: data, description: `Recorded a ${money(data.amount)} pledge payment (${data.payment_date})`,
+      })
       return { success: true, pledgePaymentId: data.id }
+    }
+
+    case 'update_pledge_payment': {
+      const result = await updateLogged(db, userId, 'pledge_payments', String(input.pledgePaymentId ?? ''),
+        pick(input, [['amount', 'amount', true], ['paymentDate', 'payment_date'], ['paymentMethod', 'payment_method'], ['notes', 'notes']]),
+        b => `Edited a ${money(b.amount as number)} pledge payment (${b.payment_date})`)
+      if (!result.ok) return { error: result.error }
+      await recomputePledgeTotals(db, String(result.before.pledge_id))
+      return { success: true, pledgePaymentId: input.pledgePaymentId }
+    }
+
+    case 'delete_pledge_payment': {
+      const result = await deleteLogged(db, userId, 'pledge_payments', String(input.pledgePaymentId ?? ''), input.reason,
+        b => `Deleted a ${money(b.amount as number)} pledge payment (${b.payment_date})`)
+      if (!result.ok) return { error: result.error }
+      await recomputePledgeTotals(db, String(result.before.pledge_id))
+      return { success: true, deleted: true }
     }
 
     case 'undo_last_change': {
@@ -762,6 +1032,7 @@ export async function executeSensitiveTool(db: Db, name: string, input: Record<s
       if (!action) return { error: 'Nothing to undo.' }
       const result = await applyUndo(db, action as ActionRow)
       if (!result.ok) return { error: result.error }
+      await afterRestore(db, action as ActionRow)
       await db.from('assistant_actions').update({ undone_at: new Date().toISOString() }).eq('id', action.id)
       return { success: true, undone: action.description }
     }
@@ -774,6 +1045,7 @@ export async function executeSensitiveTool(db: Db, name: string, input: Record<s
       if (!action) return { error: 'Nothing to redo.' }
       const result = await applyRedo(db, action as ActionRow)
       if (!result.ok) return { error: result.error }
+      await afterRestore(db, action as ActionRow)
       await db.from('assistant_actions').update({ undone_at: null }).eq('id', action.id)
       return { success: true, redone: action.description }
     }

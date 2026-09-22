@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
+import { recomputePledgeTotals } from '@/lib/pledges'
 import {
   CheckCircle, XCircle, Plus, Edit2, Trash2, Search, UserPlus,
   DollarSign, ArrowUpDown, ArrowUp, ArrowDown, Filter, X
@@ -91,6 +92,8 @@ export default function PledgesPage() {
     if (editingPledge) {
       const { error } = await supabase.from('pledges').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', editingPledge.id)
       if (error) { alert('Failed to update pledge'); return }
+      // A changed amount can flip fulfilled either way.
+      await recomputePledgeTotals(supabase, editingPledge.id)
     } else {
       const { error } = await supabase.from('pledges').insert(payload)
       if (error) { alert('Failed to create pledge'); return }
@@ -106,6 +109,7 @@ export default function PledgesPage() {
       payment_date: paymentForm.payment_date, payment_method: paymentForm.payment_method, notes: paymentForm.notes || null,
     })
     if (error) { alert('Failed to record payment'); return }
+    await recomputePledgeTotals(supabase, viewingPledge.id)
     setPaymentForm({ amount: '', payment_date: new Date().toISOString().split('T')[0], payment_method: 'Cash', notes: '' })
     setShowPaymentForm(false)
     await loadPayments(viewingPledge.id)
@@ -117,7 +121,12 @@ export default function PledgesPage() {
   async function deletePayment(id: string) {
     if (!confirm('Delete this payment?')) return
     await supabase.from('pledge_payments').delete().eq('id', id)
-    if (viewingPledge) { await loadPayments(viewingPledge.id); await loadPledges() }
+    if (viewingPledge) {
+      await recomputePledgeTotals(supabase, viewingPledge.id)
+      await loadPayments(viewingPledge.id); await loadPledges()
+      const updated = (await supabase.from('pledges').select('*, donors(name)').eq('id', viewingPledge.id).single()).data
+      if (updated) setViewingPledge(updated)
+    }
   }
 
   async function deletePledge(id: string) {
