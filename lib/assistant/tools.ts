@@ -821,9 +821,14 @@ export async function executeSensitiveTool(db: Db, name: string, input: Record<s
       const to = Array.isArray(input.to) ? input.to.map(String).filter(Boolean) : []
       if (!to.length) return { error: 'No recipient given — the donor may not have an email on file.' }
       const pdf = clientData.receiptPdfBase64 ?? ''
+      // No PDF at all almost always means the staff member's tab loaded the
+      // CRM before this tool existed (the widget keeps its chat across
+      // in-app navigation, so the old bundle can live for hours) — its
+      // approve button doesn't know to build one.
+      if (!pdf) return { error: 'Nothing was sent: this browser tab is running an older version of the CRM that can\'t build the receipt PDF. Tell the staff member to reload the page (Cmd+R / Ctrl+R) and ask again — the chat will reset.' }
       // "JVBER" is base64 for "%PDF" — cheap sanity check that the browser
       // actually sent a PDF and not something else.
-      if (!pdf.startsWith('JVBER') || pdf.length > MAX_RECEIPT_PDF_BASE64) return { error: 'The receipt PDF couldn\'t be generated in the browser, so nothing was sent. Try again, or use Email receipt on the donor\'s page.' }
+      if (!pdf.startsWith('JVBER') || pdf.length > MAX_RECEIPT_PDF_BASE64) return { error: 'The receipt PDF the browser built was invalid or too large, so nothing was sent. Try again, or use Email receipt on the donor\'s page.' }
       const { data: donation, error: donationError } = await db.from('donations')
         .select('id,amount,donation_date,donor_id,donors(name)').eq('id', String(input.donationId ?? '')).single()
       if (donationError || !donation) return { error: 'Donation not found.' }
