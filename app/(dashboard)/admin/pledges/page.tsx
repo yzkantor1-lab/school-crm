@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/currency'
 import { recomputePledgeTotals } from '@/lib/pledges'
+import PeriodSelect from '@/components/PeriodSelect'
+import { currentYearPeriod, inPeriod, selectableYears, type Period } from '@/lib/periods'
 import {
   CheckCircle, XCircle, Plus, Edit2, Trash2, Search, UserPlus,
   DollarSign, ArrowUpDown, ArrowUp, ArrowDown, Filter, X
@@ -42,6 +44,8 @@ export default function PledgesPage() {
   const [showPaymentForm, setShowPaymentForm] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  // Defaults to the current school year, by pledge date; totals follow it.
+  const [period, setPeriod] = useState<Period>(currentYearPeriod)
   const [showFilters, setShowFilters] = useState(false)
   const [sortField, setSortField] = useState<SortField>('due_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
@@ -172,7 +176,9 @@ export default function PledgesPage() {
   const filteredDonors = donors.filter(d => d.name.toLowerCase().includes(donorSearch.toLowerCase()))
   const selectedDonorObj = donors.find(d => d.id === formData.donor_id)
 
-  const filteredSorted = pledges
+  const periodPledges = pledges.filter(p => inPeriod(p.pledge_date, period))
+
+  const filteredSorted = periodPledges
     .filter(p => {
       if (statusFilter === 'fulfilled' && !p.fulfilled) return false
       if (statusFilter === 'outstanding' && p.fulfilled) return false
@@ -191,8 +197,8 @@ export default function PledgesPage() {
       return sortDir === 'asc' ? cmp : -cmp
     })
 
-  const totalPledged = pledges.reduce((s, p) => s + p.amount, 0)
-  const totalPaid = pledges.reduce((s, p) => s + (p.amount_paid || 0), 0)
+  const totalPledged = periodPledges.reduce((s, p) => s + p.amount, 0)
+  const totalPaid = periodPledges.reduce((s, p) => s + (p.amount_paid || 0), 0)
 
   if (loading) return <div className="text-center py-12 text-slate-500">Loading pledges...</div>
 
@@ -204,6 +210,11 @@ export default function PledgesPage() {
           className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium">
           <Plus size={16} />New Pledge
         </button>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <PeriodSelect value={period} onChange={setPeriod} years={selectableYears()} />
+        <p className="text-xs text-slate-400">Pledges made within this period (by pledge date).</p>
       </div>
 
       <div className="grid grid-cols-3 gap-4">

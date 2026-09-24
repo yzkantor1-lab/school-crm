@@ -172,7 +172,7 @@ export const GRADE_LEVELS = ['First Year', 'Second Year', 'Third Year', 'Fourth 
 // The school year (index into SCHOOL_YEAR_SEMESTERS) we're currently in, or
 // most recently started — the last year whose Semester 1 has already begun.
 // Falls back to index 0 if today is before the earliest year on file.
-function schoolYearIndexForDate(dateStr: string): number {
+export function schoolYearIndexForDate(dateStr: string): number {
   let idx = 0
   for (let i = 0; i < SCHOOL_YEAR_SEMESTERS.length; i++) {
     if (SCHOOL_YEAR_SEMESTERS[i].semesters[0].startDate <= dateStr) idx = i

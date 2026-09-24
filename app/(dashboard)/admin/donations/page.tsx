@@ -9,6 +9,8 @@ import { DollarSign, Calendar, CreditCard, FileText, UserPlus, X, AlertTriangle,
 import ChargeModal from '@/components/sola/ChargeModal'
 import RecurringModal from '@/components/sola/RecurringModal'
 import EmailInput from '@/components/EmailInput'
+import PeriodSelect from '@/components/PeriodSelect'
+import { currentYearPeriod, periodDateRange, periodLabel, selectableYears, type Period } from '@/lib/periods'
 
 type Donor = { id: string; name: string; email: string | null }
 type StudentParent = { id: string; first_name: string; last_name: string; father_name: string | null; mother_name: string | null }
@@ -57,6 +59,8 @@ export default function DonationsPage() {
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<{ id: string; label: string }[]>([])
   const [showChargeModal, setShowChargeModal] = useState(false)
   const [showRecurringModal, setShowRecurringModal] = useState(false)
+  // Defaults to the current school year; the list and totals below follow it.
+  const [period, setPeriod] = useState<Period>(currentYearPeriod)
 
   // Warn before creating a possible duplicate contact — matches by exact
   // normalized name against existing donors, or against a student's parent
@@ -106,10 +110,16 @@ export default function DonationsPage() {
 
   const fetchDonations = useCallback(async () => {
     setLoading(true)
-    const { data } = await supabase.from('donations').select('*, donors(name), events(name)').eq('archived', false).order('donation_date', { ascending: false }).limit(50)
+    let query = supabase.from('donations').select('*, donors(name), events(name)').eq('archived', false)
+    const range = periodDateRange(period)
+    if (range) query = query.gte('donation_date', range.start).lte('donation_date', range.end)
+    const { data } = await query.order('donation_date', { ascending: false })
     setDonations((data ?? []) as unknown as Donation[])
     setLoading(false)
-  }, [supabase])
+  }, [supabase, period])
+
+  const totalCollected = donations.reduce((sum, d) => sum + Number(d.amount), 0)
+  const donorCount = new Set(donations.map(d => d.donor_id)).size
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount, batches related state after the await
   useEffect(() => { fetchSettings(); fetchDonors(); fetchDonations(); fetchEvents(); fetchStudentParents() }, [fetchSettings, fetchDonors, fetchDonations, fetchEvents, fetchStudentParents])
@@ -343,10 +353,30 @@ export default function DonationsPage() {
         </form>
       </div>
 
-      {/* Recent Donations */}
+      {/* Totals for the selected period */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <PeriodSelect value={period} onChange={setPeriod} years={selectableYears()} />
+        <p className="text-xs text-slate-400">Donations dated within {period.kind === 'all' ? 'any year' : periodLabel(period)} (archived donations excluded).</p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
+          <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Total Collected</p>
+          <p className="text-2xl font-bold text-green-600 mt-1">{formatCurrency(totalCollected)}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
+          <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Donations</p>
+          <p className="text-2xl font-bold text-slate-900 mt-1">{donations.length}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
+          <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Donors</p>
+          <p className="text-2xl font-bold text-slate-900 mt-1">{donorCount}</p>
+        </div>
+      </div>
+
+      {/* Donations in the selected period */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h2 className="font-semibold text-slate-900">Recent Donations</h2>
+          <h2 className="font-semibold text-slate-900">Donations — {periodLabel(period)}</h2>
           <span className="text-sm text-slate-500">{donations.length} records</span>
         </div>
         {loading ? (
@@ -378,7 +408,7 @@ export default function DonationsPage() {
                 </tr>
               ))}
               {!donations.length && (
-                <tr><td colSpan={6} className="px-5 py-10 text-center text-slate-400">No donations yet.</td></tr>
+                <tr><td colSpan={6} className="px-5 py-10 text-center text-slate-400">No donations in this period.</td></tr>
               )}
             </tbody>
           </table>
